@@ -1,0 +1,21 @@
+# Phase 1 — data pipeline config (PROJECT_SPEC.md §5)
+# Source: NoteChat, see OPEN_DECISIONS #2. Clinical notes are PMC-Patients
+# case reports (public, from PubMed Central); `our_revised_v2.csv` is
+# NoteChat's own multi-agent-pipeline conversation variant — see
+# docs/DECISIONS.md for why this variant was picked over gpt-3.5.csv /
+# gpt-4.csv (same 10k notes, different generation method) and
+# gpt-3.5-160k.csv (167k notes, single-pass GPT-3.5 only).
+data_root: data/raw/notechat
+source_file: our_revised_v2.csv
+
+label_space:
+  strategy: none # free-form dialogue generation, not extraction — no fixed output taxonomy (contrast CUAD)
+
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  key: note_id # one row = one unique clinical note (verified at build time) — see OPEN_DECISIONS #5
+  seed: 42
+
+output_dir: data/processed

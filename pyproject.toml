@@ -1,0 +1,70 @@
+[project]
+name = "company-finetune-eval"
+version = "0.1.0"
+description = "On-prem QLoRA vs. a larger baseline model, fine-tuned and evaluated on company data"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "transformers>=4.46",
+    "datasets>=3.0",
+    "polars>=1.10",
+    "duckdb>=1.1",
+    "scikit-learn>=1.5",
+    "numpy>=1.26,<2.0",
+    "scipy>=1.14",
+    "matplotlib>=3.9",
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+    "rouge-score>=0.1.2",
+    "bert-score>=0.3.13",
+]
+
+# GPU/CUDA-locked training stack. Install on an NVIDIA machine (Linux or
+# Windows) with `uv sync --extra gpu`. torch, bitsandbytes, unsloth, peft,
+# and accelerate are kept out of the default group so a plain `uv sync`
+# stays installable on a non-CUDA dev machine.
+#
+# torch is capped <2.12 because unsloth requires it; torchvision is listed
+# explicitly (rather than left transitive via unsloth) so the CUDA index
+# source below applies to it and its torch==2.11.0 pin stays satisfiable.
+[project.optional-dependencies]
+gpu = [
+    "torch>=2.4,<2.12",
+    "torchvision",
+    "bitsandbytes>=0.43",
+    "unsloth",
+    "trl>=0.11",
+    "peft>=0.13",
+    "accelerate>=1.0",
+]
+llm-large = [
+    "llama-cpp-python>=0.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pre-commit>=4.0",
+    "ipykernel>=6.29",
+]
+
+# PyPI's torch wheels are CPU-only on Windows, which silently yields
+# `torch.cuda.is_available() == False`. Pull torch/torchvision from
+# PyTorch's CUDA 12.8 index instead. cu128 is the newest CUDA line that
+# has a torch 2.11.0 build for every platform we target; bitsandbytes
+# ships a matching libbitsandbytes_cuda128 kernel. Left as `explicit`
+# so nothing else is resolved from that index.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

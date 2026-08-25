@@ -1,0 +1,39 @@
+# data & derived artifacts — never commit anything that could contain sensitive company data
+data/
+*.parquet
+*.csv
+*.jsonl
+models/
+outputs/
+annotation/*.parquet
+annotation/gold*/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+uv.lock.tmp
+
+# env / secrets
+.env
+*.env.local
+
+# training artifacts
+wandb/
+*.ckpt
+*.safetensors
+artifacts/
+unsloth_compiled_cache/
+
+# docs (working notes, not for version control)
+docs/
+
+# OS
+.DS_Store
+
+# editor
+.vscode/
