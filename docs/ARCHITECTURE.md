@@ -23,8 +23,8 @@ flowchart TD
     D --> F[Results:\nmetrics + confidence intervals]
     F --> G[Write-up\nREADME, MODEL_CARD\nPhase 7]
 
-    style A fill:#f9d5d5,stroke:#333
-    style G fill:#d5f9d8,stroke:#333
+    style A fill:#f8d7da,stroke:#b4545a,stroke-width:2px,color:#1a1a1a
+    style G fill:#d3edda,stroke:#3f8f57,stroke-width:2px,color:#1a1a1a
 ```
 
 **Everything inside the dashed boundary below runs on the local machine
@@ -45,7 +45,7 @@ flowchart LR
     EXT[External APIs\nOpenAI / Anthropic / etc.]
     LOCAL -. NEVER\nunless OPEN_DECISIONS #3\nsays otherwise .-> EXT
 
-    style EXT fill:#f9d5d5,stroke:#900,stroke-dasharray: 5 5
+    style EXT fill:#f8d7da,stroke:#900,stroke-width:2px,stroke-dasharray: 5 5,color:#1a1a1a
 ```
 
 ---

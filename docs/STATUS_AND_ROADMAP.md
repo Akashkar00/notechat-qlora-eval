@@ -14,19 +14,21 @@ stand" view, and will go stale fast; treat it as a snapshot, not a live doc.
 |---|---|---|
 | Task selection + spec | Done, pivoted once | `PROJECT_SPEC.md` §7a — NoteChat clinical-note → dialogue generation, superseding an earlier CUAD spec (`DECISIONS.md` "Task pivot") |
 | Phase 1 — Data pipeline | **Done** | `src/data/build_dataset.py`; 10,000 NoteChat notes → 8,000/1,000/1,000 split by `note_id`, seed 42, 0 duplicates; `docs/data_report.md`; `pytest tests/test_data.py` 12/12 |
-| Phase 2 — Eval harness | **Built, first full run in progress** | `src/eval/metrics.py`, `src/eval/run_eval.py`, `src/inference/local_hf.py`; `pytest tests/test_eval.py` 12/12; zero-shot + fine-tuned arms running now against `data/processed/test.parquet` (200 records each) |
+| Phase 2 — Eval harness | **Done** | `src/eval/metrics.py`, `src/eval/run_eval.py`, `src/inference/local_hf.py`; `pytest tests/test_eval.py` 12/12; full 200-record runs for arms 1, 2, and 3 with bootstrap CIs and paired deltas — see `README.md` Results |
 | Phase 3 — Contamination probe | **Not started** | No `src/eval/contamination.py`, no `docs/contamination_report.md`. Required per spec — NoteChat's source notes (PMC-Patients) are public, so a foundation model may have seen them in pretraining |
 | Phase 4 — Gold annotation | Skipped, documented | `PROJECT_SPEC.md` §7a item 6 — reasoned skip (LLM-generated reference, human "gold" dialogue wouldn't fix that), not an oversight |
 | Phase 5 — QLoRA fine-tune | **Done** | `notebooks/finetune.ipynb`; Qwen2.5-3B-Instruct-bnb-4bit, LoRA r=16, 2 epochs / 250 steps; adapter at `artifacts/adapters/.../final_adapter`; sanity-checked qualitatively (`DECISIONS.md`) |
-| Phase 6 — Baselines (4 arms) | **1 of 4 wired up** | Arm 1 (zero-shot small model) and arm 3 (fine-tuned small model) run through `run_eval.py` today. Arm 2 (zero-shot large open-weight baseline) and arm 4 (classic/non-LLM baseline) don't exist yet — `src/baselines/` is still an empty `__init__.py` |
-| Phase 7 — Write-up | **Not started** | `README.md` is still 100% the old CUAD version (wrong task description, wrong results table, wrong repro commands). No `docs/MODEL_CARD.md` |
-| Git history | **None** | `master` has zero commits — everything is still staged/untracked from initial scaffold |
+| Phase 6 — Baselines (4 arms) | **3 of 4 done** | Arm 1 (zero-shot 3B), arm 2 (zero-shot 14B, via bnb-4bit — see `DECISIONS.md` for the llama.cpp→transformers pivot), and arm 3 (fine-tuned 3B) all have full 200-record results. **Headline finding: fine-tuned 3B beats zero-shot 14B on every metric, all 95% CIs excluding zero.** Arm 4 (classic/non-LLM) doesn't exist yet — `src/baselines/` is still an empty `__init__.py` |
+| Phase 7 — Write-up | **In progress** | `README.md` rewritten for NoteChat with the real results table and paired comparisons. No `docs/MODEL_CARD.md` yet |
+| Git history | **3 commits, pushed** | `github.com/Akashkar00/notechat-qlora-eval`, public |
 
 Known small open items already tracked in `DECISIONS.md`: `src/train/train.py`
 (CLI trainer) is still CUAD-shaped and hasn't been rewritten to match the
 notebook; the epoch-2 `eval_loss` is missing from `trainer_state.json`
 (not yet investigated); a hallucination/faithfulness check was found needed
-during the sanity-check pass but isn't implemented as a metric yet.
+during the sanity-check pass but isn't implemented as a metric yet; the
+paired-delta comparison across arms is computed by an ad-hoc script, not a
+committed `src/eval/compare.py` CLI entrypoint.
 
 ---
 
@@ -52,8 +54,8 @@ flowchart TD
 
     RUNEVAL --> RESULTS[("artifacts/eval/zero-shot/results.json\nartifacts/eval/finetuned/results.json")]
 
-    style RAW fill:#f9d5d5,stroke:#333
-    style RESULTS fill:#d5f9d8,stroke:#333
+    style RAW fill:#f8d7da,stroke:#b4545a,stroke-width:2px,color:#1a1a1a
+    style RESULTS fill:#d3edda,stroke:#3f8f57,stroke-width:2px,color:#1a1a1a
 ```
 
 **Repo layout, as it exists right now (not the aspirational Phase-7 tree):**
@@ -115,10 +117,11 @@ GitHub visitor) actually sees, not by build effort.
 4. **Let the current eval run finish and report real numbers** (in
    progress) — zero-shot vs. fine-tuned, ROUGE/BERTScore with bootstrap
    CIs, tokens/sec, peak VRAM.
-5. **Paired bootstrap delta between arms.** `metrics.py` already has
-   `paired_bootstrap_delta` — it's unused until there are ≥2 arms' results
-   to diff. This is the actual thesis test ("did fine-tuning help, with a
-   CI on the delta, not just two point estimates").
+5. ~~**Paired bootstrap delta between arms.**~~ **Done** — computed across
+   all three completed arms (`artifacts/eval/comparison_all_arms.json`,
+   `README.md` Results). Still ad-hoc (a one-off script, not a committed
+   `src/eval/compare.py` entrypoint) — worth formalizing so it's
+   reproducible from the command line like everything else.
 6. **Hallucination/faithfulness check.** Flagged as a real finding during
    the qualitative sanity check (a fabricated aside with no basis in the
    source note) but never turned into a metric. Even a simple heuristic
@@ -126,12 +129,13 @@ GitHub visitor) actually sees, not by build effort.
    would close a currently-known gap rather than leave it as a footnote.
 
 ### The comparison the thesis actually depends on
-7. **Phase 6 arm 2 — zero-shot large baseline.** Without this, the project
-   can't answer its own headline question ("does a small QLoRA model match
-   a larger one") — right now it only compares the small model to itself
-   (zero-shot vs. fine-tuned). This is probably the single most important
-   missing piece for the project's stated thesis to mean anything.
-8. **Phase 6 arm 4 — classic/non-LLM baseline.** Currently `src/baselines/`
+7. ~~**Phase 6 arm 2 — zero-shot large baseline.**~~ **Done.** Result: the
+   fine-tuned 3B model beats the zero-shot 14B model on every metric, all
+   95% CIs excluding zero (`README.md` Results) — the project's headline
+   finding now has actual evidence behind it, not just the small model
+   compared to itself.
+8. **Phase 6 arm 4 — classic/non-LLM baseline.** Now the only baseline arm
+   left. Currently `src/baselines/`
    is empty. Per the spec this is a legitimate, valuable arm even (especially)
    if it loses — "an LLM wasn't needed" is a real finding for this task
    shape, but there's no evidence either way yet.

@@ -36,8 +36,12 @@ gpu = [
     "peft>=0.13",
     "accelerate>=1.0",
 ]
+# Pinned exactly (not >=) because abetlen's prebuilt CUDA wheel index only
+# publishes 0.3.4 for cp311/win_amd64 at cu124 — plain `pip install
+# llama-cpp-python` builds a CPU-only wheel from source on Windows with no
+# error, same silent-fallback trap as torch (see finetune_kernel_setup_status.md).
 llm-large = [
-    "llama-cpp-python>=0.3",
+    "llama-cpp-python==0.3.4",
 ]
 
 [dependency-groups]
@@ -58,9 +62,18 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
+# cu124 build works against the installed CUDA 12.8 runtime (NVIDIA's CUDA
+# minor-version compatibility covers this) — abetlen's index has no cu128
+# folder, and this is the newest version published for cp311/win_amd64.
+[[tool.uv.index]]
+name = "llama-cpp-python-cu124"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cu124"
+explicit = true
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+llama-cpp-python = { index = "llama-cpp-python-cu124" }
 
 [build-system]
 requires = ["hatchling"]

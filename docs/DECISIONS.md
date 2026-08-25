@@ -345,6 +345,85 @@ the fine-tuned 3B model is competitive with a larger model (Phase 6 arm 2,
 not built) or a classic/non-LLM approach (arm 4, not built). Those are the
 comparisons the project's actual thesis depends on.
 
+---
+
+## Phase 6 arm 2 — large baseline model, serving backend pivot (2026-08-25)
+
+**Decision:** picked `unsloth/Qwen2.5-14B-Instruct-bnb-4bit` as the "larger
+open-weight baseline" (`OPEN_DECISIONS` #7 was left as "32B-70B range,
+verify at build time" — 14B is the size that's actually feasible on this
+12GB-VRAM/32GB-RAM machine; confirmed the checkpoint exists on HuggingFace
+before using it, per §6). Served it through the **same bnb-4bit
+transformers/unsloth stack already used for the fine-tune**
+(`src/inference/local_hf.py`'s existing `load_model`/`generate`, unchanged —
+just a bigger `--model-name`), not llama.cpp/GGUF as `PROJECT_SPEC.md` §5
+originally suggested.
+
+**Why the pivot:** `llama-cpp-python`'s only CUDA-enabled wheels for this
+platform (cp311/win_amd64) are hosted as GitHub release assets
+(`abetlen.github.io/llama-cpp-python/whl/cu124`, resolving to
+`release-assets.githubusercontent.com`) — that specific host is unreachable
+from this machine's network (confirmed: `github.com`, `raw.githubusercontent.com`,
+and `huggingface.co` all resolve fine; `release-assets.githubusercontent.com`
+times out on TLS connect, both via `uv` and raw `curl`). PyPI ships no
+prebuilt wheel at all for this package (source-only), and no C++
+toolchain/CMake is installed to build it locally. Rather than spend
+significant time installing Visual Studio Build Tools just to compile a
+CPU-only or CUDA fallback, reused the transformers/bitsandbytes/unsloth
+stack that's already proven working on this exact machine — same
+quantization approach (bnb NF4 4-bit) as the fine-tune, so this isn't a
+lower-effort/lower-quality substitute, just a different (already-verified)
+serving backend for the same "run it locally, 4-bit-quantized" idea the
+spec wanted.
+
+**Feasibility check (2-record smoke test before the real run):** peak VRAM
+10.42GB/12GB — tight but fits; `max_seq_len=2048` override used (via new
+`run_eval.py --max-seq-len` flag) instead of `configs/train.yaml`'s 4096,
+since that value was sized for the 3B fine-tune's training context, not a
+14B zero-shot eval, and clinical notes are short enough (max 2,330 chars,
+`docs/data_report.md`) that 2048 tokens is ample headroom. Throughput:
+5.4 tok/s, ~53s/record — real full-200-record estimate ~2.9 hours (much
+slower than QLoRA's 3B arms, as expected for ~4.7x the parameters).
+Zero-shot turn-format-valid rate on the smoke sample was already 100%
+(vs. the 3B zero-shot's 74.5%) — a 14B model following the format
+instruction reliably even without fine-tuning is itself a plausible
+finding, to be confirmed on the full run.
+
+**Consequence for `OPEN_DECISIONS` #7 / `ARCHITECTURE.md`:** both still
+describe "llama.cpp/GGUF with GPU offload" — noted here rather than fixed
+silently; needs updating alongside the broader `ARCHITECTURE.md`/`README.md`
+rewrite already tracked in `docs/STATUS_AND_ROADMAP.md`.
+
+**Full 200-record run, results (2026-08-25):** ROUGE-1 0.445, ROUGE-2
+0.117, ROUGE-L 0.198, BERTScore F1 0.865, turn-format-valid 100%, 12.3
+tok/s, peak VRAM 10.44GB. Saved to
+`artifacts/eval/large-baseline-zero-shot/results.json`.
+
+**This is the project's headline result.** Paired bootstrap comparison
+across all three arms (`artifacts/eval/comparison_all_arms.json`), same 200
+test records:
+
+| Comparison | ROUGE-1 Δ | ROUGE-2 Δ | ROUGE-L Δ | BERTScore Δ |
+|---|---|---|---|---|
+| fine-tuned 3B − zero-shot 14B | +0.186 [+0.174, +0.198] | +0.232 [+0.216, +0.248] | +0.208 [+0.193, +0.223] | +0.043 [+0.040, +0.047] |
+| fine-tuned 3B − zero-shot 3B | +0.341 [+0.321, +0.359] | +0.269 [+0.255, +0.285] | +0.257 [+0.241, +0.272] | +0.057 [+0.054, +0.060] |
+| zero-shot 14B − zero-shot 3B | +0.154 [+0.136, +0.173] | +0.038 [+0.030, +0.045] | +0.049 [+0.041, +0.058] | +0.014 [+0.012, +0.016] |
+
+**The fine-tuned 3B model beats the zero-shot 14B model (~4.7x more
+parameters) on every metric, every CI excluding zero.** Scaling 3B→14B
+zero-shot bought +0.154 ROUGE-1; QLoRA fine-tuning the 3B model bought
++0.341 — more than double the effect of a ~5x parameter increase, on this
+task and this similarity measure. This is the thesis in `PROJECT_SPEC.md`
+§0 confirmed by an actual paired statistical test, not just point estimates
+eyeballed side by side. Same ground-truth caveat as always: measures
+similarity to NoteChat's own LLM-generated reference, not clinical
+correctness.
+
+**Still open:** arm 4 (classic/non-LLM baseline) is the only Phase 6 arm
+left — without it, "an LLM wasn't needed at all" remains an untested
+possibility for this task, per the spec's explicit instruction not to skip
+that arm even though the LLM arms now look strong.
+
 **Fixed:** `tests/test_data.py::test_load_raw_rejects_unexpected_columns`
 hardcoded `/tmp/_bad_schema_test.csv`, which doesn't exist on this Windows
 machine outside WSL — replaced with pytest's `tmp_path` fixture (a real

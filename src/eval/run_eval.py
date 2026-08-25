@@ -43,7 +43,14 @@ def sample_records(df: pl.DataFrame, n: int | None, seed: int) -> pl.DataFrame:
     return df.sample(n=n, seed=seed)
 
 
-def run(arm: str, model_name: str, adapter_path: str | None, n_records: int | None, seed: int) -> dict:
+def run(
+    arm: str,
+    model_name: str,
+    adapter_path: str | None,
+    n_records: int | None,
+    seed: int,
+    max_seq_len: int | None = None,
+) -> dict:
     train_cfg = yaml.safe_load(TRAIN_CONFIG_PATH.read_text())
     eval_cfg = yaml.safe_load(EVAL_CONFIG_PATH.read_text())
 
@@ -53,7 +60,11 @@ def run(arm: str, model_name: str, adapter_path: str | None, n_records: int | No
 
     model, tokenizer = load_model(
         model_name=model_name,
-        max_seq_len=train_cfg["max_seq_len"],
+        # configs/train.yaml's max_seq_len (4096) was sized for the 3B
+        # fine-tune's training context; a larger zero-shot baseline model
+        # needs its own override so its bigger KV cache doesn't need the
+        # same headroom this config assumed (PROJECT_SPEC.md §5 Phase 6 arm 2).
+        max_seq_len=max_seq_len if max_seq_len is not None else train_cfg["max_seq_len"],
         load_in_4bit=train_cfg["quantization"]["load_in_4bit"],
         seed=train_cfg["seed"],
         adapter_path=adapter_path,
@@ -133,12 +144,15 @@ def main() -> None:
     parser.add_argument("--adapter", default=None, help="Path to a saved LoRA adapter dir; omit for zero-shot")
     parser.add_argument("--n-records", type=int, default=None, help="Defaults to configs/eval.yaml's val_records")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--max-seq-len", type=int, default=None, help="Overrides configs/train.yaml's max_seq_len for this run"
+    )
     args = parser.parse_args()
 
     eval_cfg = yaml.safe_load(EVAL_CONFIG_PATH.read_text())
     n_records = args.n_records if args.n_records is not None else eval_cfg["val_records"]
 
-    run(args.arm, args.model_name, args.adapter, n_records, args.seed)
+    run(args.arm, args.model_name, args.adapter, n_records, args.seed, args.max_seq_len)
 
 
 if __name__ == "__main__":

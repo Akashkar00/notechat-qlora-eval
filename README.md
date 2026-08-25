@@ -18,20 +18,20 @@ spec: [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md). Decisions log:
 
 ## Status
 
-**Phase 1 (data pipeline) and Phase 5 (QLoRA fine-tune) are done. Phase 2
-(eval harness) is built and running its first pass.** Everything else below
-is what's left before this reads as a finished project — see
-[`docs/STATUS_AND_ROADMAP.md`](docs/STATUS_AND_ROADMAP.md) for the full
-ranked list.
+**Phases 1 (data), 5 (QLoRA fine-tune) and 2 (eval harness) are done, with a
+full 200-record result set for three of the four baseline arms.** Arm 4
+(classic/non-LLM baseline) and the contamination probe are not built. See
+[`docs/STATUS_AND_ROADMAP.md`](docs/STATUS_AND_ROADMAP.md) for the ranked
+list of what's left.
 
 | Phase | Status |
 |---|---|
 | 1 — Data pipeline | Done — 10,000 NoteChat notes → 8,000/1,000/1,000 split by `note_id`, 0 duplicates (`docs/data_report.md`) |
-| 2 — Eval harness | Built — `pytest tests/test_eval.py` 12/12; zero-shot + fine-tuned arms running |
+| 2 — Eval harness | Done — `pytest tests/test_eval.py` 12/12; full 200-record run for arms 1, 2, and 3, with bootstrap CIs and paired deltas |
 | 3 — Contamination probe | Not started |
 | 4 — Gold annotation | Skipped, documented (`PROJECT_SPEC.md` §7a item 6) |
-| 5 — QLoRA fine-tune | Done — `notebooks/finetune.ipynb`, Qwen2.5-3B-Instruct, LoRA r=16 |
-| 6 — Baselines (4 arms) | 2 of 4 wired up (zero-shot + fine-tuned small model) |
+| 5 — QLoRA fine-tune | Done — `notebooks/finetune.ipynb`, Qwen2.5-3B-Instruct, LoRA r=16, 2 epochs / 250 steps |
+| 6 — Baselines (4 arms) | 3 of 4 complete (arms 1, 2, 3). Arm 4 (classic/non-LLM) not built |
 | 7 — Write-up | In progress |
 
 ## Architecture
@@ -52,8 +52,8 @@ flowchart TD
 
     RUNEVAL --> RESULTS[("artifacts/eval/zero-shot/results.json\nartifacts/eval/finetuned/results.json")]
 
-    style RAW fill:#f9d5d5,stroke:#333
-    style RESULTS fill:#d5f9d8,stroke:#333
+    style RAW fill:#f8d7da,stroke:#b4545a,stroke-width:2px,color:#1a1a1a
+    style RESULTS fill:#d3edda,stroke:#3f8f57,stroke-width:2px,color:#1a1a1a
 ```
 
 **Everything above runs on the local machine only** — no company data is
@@ -73,11 +73,11 @@ company-finetune-eval/
 │   │   ├── metrics.py             # rouge / bertscore / bootstrap CIs
 │   │   └── run_eval.py            # single entrypoint, one arm per run
 │   ├── train/train.py           # STALE — not yet rewritten to match the notebook
-│   └── baselines/                # EMPTY — arm 2 & 4 baselines not built yet
+│   └── baselines/                # EMPTY — arm 4 baseline not built yet
 ├── notebooks/finetune.ipynb  # the actual Phase 5 training driver
 ├── artifacts/
-│   ├── adapters/.../             # LoRA weights, checkpoints
-│   └── eval/{arm}/results.json
+│   ├── adapters/.../             # LoRA weights, checkpoints (gitignored)
+│   └── eval/{arm}/results.json   # committed
 ├── tests/                     # test_data.py, test_eval.py
 └── docs/
     ├── PROJECT_SPEC.md         # full spec
@@ -93,39 +93,119 @@ README's diagram above as the current one).
 
 ## Results
 
-_TBD — populated only by `run_eval.py` output, never hand-written._
+All numbers below are read from `artifacts/eval/*/results.json`, produced by
+`run_eval.py` — never hand-written. All three completed arms scored the
+**same 200 test records** (`--n-records 200 --seed 42`), so every comparison
+below is paired.
 
-| Arm | ROUGE / BERTScore (95% CI) | Turn-format validity | Latency |
-|---|---|---|---|
-| 1 — Zero-shot small model | TBD | TBD | TBD |
-| 2 — Zero-shot large baseline | TBD | TBD | TBD |
-| 3 — QLoRA-tuned small model | TBD | TBD | TBD |
-| 4 — Classic/non-LLM baseline | TBD | TBD | TBD |
+### Per-arm (95% percentile bootstrap CI, 1,000 resamples)
 
-**Caveat:** the `conversation` reference target is itself LLM-generated
-(NoteChat's own pipeline), not a human-authored transcript. Any
-reference-based metric above measures similarity to one synthetic
-exemplar, not correctness against verified ground truth — see
-`docs/PROJECT_SPEC.md` §4.2.
+| Arm | ROUGE-1 | ROUGE-L | BERTScore-F1 | Turn-format validity | Throughput | Peak VRAM |
+|---|---|---|---|---|---|---|
+| 1 — Zero-shot Qwen2.5-3B (4-bit) | 0.291 [0.273, 0.305] | 0.149 [0.141, 0.156] | 0.852 [0.849, 0.853] | 74.5% | 25.0 tok/s | 2.24 GB |
+| 2 — Zero-shot Qwen2.5-14B (4-bit) | 0.445 [0.438, 0.453] | 0.198 [0.194, 0.202] | 0.865 [0.863, 0.867] | 100% | 12.3 tok/s | 10.44 GB |
+| 3 — QLoRA-tuned Qwen2.5-3B (4-bit) | **0.631 [0.622, 0.641]** | **0.405 [0.392, 0.419]** | **0.909 [0.906, 0.911]** | **100%** | 17.2 tok/s | 2.42 GB |
+| 4 — Classic/non-LLM baseline | not built | — | — | — | — | — |
+
+### Arm 3 vs. arm 2 — the actual thesis test
+
+Not two point estimates side by side, but a confidence interval on the
+per-record difference (`artifacts/eval/comparison_all_arms.json`). This is
+the comparison the project's headline question depends on: does the
+QLoRA-tuned 3B model actually compete with a model ~4.7× its size?
+
+| Metric | Δ (fine-tuned 3B − zero-shot 14B) | 95% CI |
+|---|---|---|
+| ROUGE-1 | +0.186 | [0.174, 0.198] |
+| ROUGE-2 | +0.232 | [0.216, 0.248] |
+| ROUGE-L | +0.208 | [0.193, 0.223] |
+| BERTScore-F1 | +0.043 | [0.040, 0.047] |
+
+**Every interval excludes zero, in favor of the fine-tuned 3B model.** It
+doesn't just match the 14B zero-shot model — it beats it, on every metric,
+while using ~4× less VRAM and running at higher throughput. Scaling
+3B→14B zero-shot bought +0.154 ROUGE-1 (see full pairwise table in
+`artifacts/eval/comparison_all_arms.json`); QLoRA fine-tuning the 3B model
+bought +0.341 — more than double the effect of a ~5× parameter increase, on
+this task and this similarity measure.
+
+### Arm 3 vs. arm 1 — fine-tuning vs. its own zero-shot baseline
+
+| Metric | Δ (fine-tuned − zero-shot 3B) | 95% CI |
+|---|---|---|
+| ROUGE-1 | +0.341 | [0.321, 0.359] |
+| ROUGE-2 | +0.269 | [0.255, 0.285] |
+| ROUGE-L | +0.257 | [0.241, 0.272] |
+| BERTScore-F1 | +0.057 | [0.054, 0.060] |
+| Turn-format validity | 74.5% → 100% | — |
+
+Every interval excludes zero here too. QLoRA fine-tuning moved this model on
+this task, and the effect is far larger than sampling noise at n=200.
+
+### What these numbers do *not* say
+
+Three caveats, in descending order of how much they matter:
+
+1. **The reference is synthetic.** The `conversation` target is itself
+   LLM-generated (NoteChat's own multi-agent pipeline), not a human-authored
+   transcript. ROUGE and BERTScore here measure *similarity to one synthetic
+   exemplar*, not clinical correctness — see `docs/PROJECT_SPEC.md` §4.2.
+2. **A large part of the gain is style-matching.** Fine-tuning on 8,000
+   NoteChat dialogues teaches the model NoteChat's house style, turn count,
+   and length distribution — which is exactly what ROUGE rewards. The delta
+   above is real, but it is substantially "learned the target corpus's
+   surface form," not "learned medicine."
+3. **There is no faithfulness metric yet.** A qualitative sanity check during
+   Phase 5 caught a fabricated aside with no basis in the source note
+   (`docs/DECISIONS.md`). Nothing in the harness currently measures whether
+   the fine-tune became a *more fluent* fabricator. This is the top-ranked
+   open item.
+
+### Cost, not just quality
+
+`unsloth/Qwen2.5-14B-Instruct-bnb-4bit` at `--max-seq-len 2048` fits this
+12 GB card at **10.44 GB peak VRAM**, running at **12.3 tok/s**. The
+fine-tuned 3B model runs at **17.2 tok/s in 2.42 GB** — so it isn't a
+quality-for-cost trade either: it beats the 14B model on every content
+metric above while using **~4× less VRAM** and running **~1.4× faster**.
+
+See `docs/DECISIONS.md` for why arm 2 is served through
+transformers/bitsandbytes rather than the llama.cpp/GGUF path the spec
+originally called for (a network/build-toolchain constraint on this
+machine, not a design preference).
 
 ## Repro
 
 ```bash
 uv sync                      # core + dev deps (this machine)
 uv sync --extra gpu           # + CUDA training stack (Linux/NVIDIA only)
-uv sync --extra llm-large      # + llama.cpp for the large-model baseline
 
 pytest tests/                                  # test_data.py + test_eval.py, 24/24
 
-python -m src.data.build_dataset               # Phase 1 — done, see docs/data_report.md
-python -m src.eval.run_eval --arm zero-shot     # Phase 2 — zero-shot small model
-python -m src.eval.run_eval --arm finetuned \
-    --adapter artifacts/adapters/.../final_adapter  # Phase 2 — QLoRA-tuned small model
+python -m src.data.build_dataset               # Phase 1 — see docs/data_report.md
+
+# Phase 2 — one arm per run, results land in artifacts/eval/{arm}/results.json
+python -m src.eval.run_eval --arm zero-shot --n-records 200
+python -m src.eval.run_eval --arm finetuned --n-records 200 \
+    --adapter artifacts/adapters/unsloth__Qwen2.5-3B-Instruct-bnb-4bit/final_adapter
+
+# Phase 6 arm 2 — larger zero-shot baseline; needs the max_seq_len override,
+# since configs/train.yaml's 4096 was sized for the 3B fine-tune's training
+# context, not a 14B eval (~1.6 hrs for 200 records on a 12GB card)
+python -m src.eval.run_eval --arm zero-shot-14b --n-records 200 \
+    --model-name unsloth/Qwen2.5-14B-Instruct-bnb-4bit --max-seq-len 2048
 ```
 
-> **Windows:** `uv sync` (core deps) and `--extra llm-large` work natively.
-> `--extra gpu` (Unsloth/bitsandbytes QLoRA training) does not support
-> native Windows — run it under WSL2 or on a Linux/NVIDIA machine.
+> **Known gap:** the paired-delta JSON in `artifacts/eval/` was produced by
+> calling `metrics.paired_bootstrap_delta` over the two results files
+> directly. A `src/eval/compare.py` CLI entrypoint, so that step is
+> reproducible from the command line like every other number here, is still
+> to be written.
+
+> **Windows:** `uv sync` (core deps) works natively. `--extra gpu`
+> (Unsloth/bitsandbytes QLoRA *training*) does not support native Windows —
+> run it under WSL2 or on a Linux/NVIDIA machine. 4-bit *inference* for the
+> eval arms does run natively.
 
 ## Data governance
 
