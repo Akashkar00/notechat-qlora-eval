@@ -29,9 +29,6 @@ wandb/
 artifacts/
 unsloth_compiled_cache/
 
-# docs (working notes, not for version control)
-docs/
-
 # OS
 .DS_Store
 
