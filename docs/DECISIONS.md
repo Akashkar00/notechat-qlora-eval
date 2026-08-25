@@ -323,6 +323,28 @@ real result set).
 Numbers to be logged here once both `results.json` files exist — per §1.2,
 not written into this entry ahead of the run actually producing them.
 
+**Phase 2 acceptance results (2026-08-25):** both arms completed on the
+same 200-record sample of `data/processed/test.parquet` (seed 42).
+Zero-shot: ROUGE-1 0.291, ROUGE-2 0.079, ROUGE-L 0.149, BERTScore F1 0.852,
+turn-format-valid 74.5%, 25.0 tok/s. Fine-tuned: ROUGE-1 0.631, ROUGE-2
+0.349, ROUGE-L 0.405, BERTScore F1 0.909, turn-format-valid 100%, 17.2
+tok/s (slower — consistently produces longer, fuller dialogues rather than
+stopping early). Paired bootstrap deltas (finetuned − zero-shot, all 95%
+CIs exclude zero): ROUGE-1 +0.341 [+0.321, +0.359], ROUGE-2 +0.269 [+0.255,
++0.285], ROUGE-L +0.257 [+0.241, +0.272], BERTScore F1 +0.057 [+0.054,
++0.060]. Full per-arm records in `artifacts/eval/{zero-shot,finetuned}/
+results.json`; paired comparison in
+`artifacts/eval/comparison_zero_shot_vs_finetuned.json`. Caveat carried
+forward from §4.2: this is similarity to NoteChat's own LLM-generated
+reference, not ground-truth correctness — a real, large, statistically
+solid effect on that similarity measure, not a claim of medical accuracy.
+
+**Still open after this run:** this only shows fine-tuning helped the small
+model beat its own zero-shot baseline — it says nothing yet about whether
+the fine-tuned 3B model is competitive with a larger model (Phase 6 arm 2,
+not built) or a classic/non-LLM approach (arm 4, not built). Those are the
+comparisons the project's actual thesis depends on.
+
 **Fixed:** `tests/test_data.py::test_load_raw_rejects_unexpected_columns`
 hardcoded `/tmp/_bad_schema_test.csv`, which doesn't exist on this Windows
 machine outside WSL — replaced with pytest's `tmp_path` fixture (a real

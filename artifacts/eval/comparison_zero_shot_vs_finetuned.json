@@ -1,0 +1,38 @@
+{
+  "comparison": "finetuned - zero-shot",
+  "n_common_records": 200,
+  "paired_bootstrap_deltas": {
+    "rouge1": {
+      "delta": 0.3405781289451646,
+      "ci_low": 0.3214293556796993,
+      "ci_high": 0.3593591214192705,
+      "n": 200,
+      "n_resamples": 1000
+    },
+    "rouge2": {
+      "delta": 0.26932530608274613,
+      "ci_low": 0.2545318406138732,
+      "ci_high": 0.2845099842286369,
+      "n": 200,
+      "n_resamples": 1000
+    },
+    "rougeL": {
+      "delta": 0.25660258824680016,
+      "ci_low": 0.24069675909182175,
+      "ci_high": 0.2723734402718542,
+      "n": 200,
+      "n_resamples": 1000
+    },
+    "bertscore_f1": {
+      "delta": 0.057006848752498625,
+      "ci_low": 0.053946422420442106,
+      "ci_high": 0.0600978080779314,
+      "n": 200,
+      "n_resamples": 1000
+    }
+  },
+  "turn_format_valid_rate": {
+    "zero_shot": 0.745,
+    "finetuned": 1.0
+  }
+}

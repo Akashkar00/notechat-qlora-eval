@@ -22,11 +22,14 @@ uv.lock.tmp
 .env
 *.env.local
 
-# training artifacts
+# training artifacts — model weights/checkpoints stay local (too large for
+# git, and *.safetensors/*.pt below cover the binary weights specifically);
+# artifacts/eval/*.json results are small and are the actual evidence this
+# project produces, so they're deliberately NOT excluded here.
 wandb/
 *.ckpt
 *.safetensors
-artifacts/
+artifacts/adapters/
 unsloth_compiled_cache/
 
 # OS
