@@ -1,9 +1,12 @@
 # company-finetune-eval
 
+[![tests](https://github.com/Akashkar00/notechat-qlora-eval/actions/workflows/tests.yml/badge.svg)](https://github.com/Akashkar00/notechat-qlora-eval/actions/workflows/tests.yml)
+
 On-prem QLoRA vs. a larger baseline model, fine-tuned and evaluated on
 **clinical note → doctor-patient dialogue generation** (NoteChat). Full
 spec: [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md). Decisions log:
-[`docs/DECISIONS.md`](docs/DECISIONS.md). Current status:
+[`docs/DECISIONS.md`](docs/DECISIONS.md). Model card:
+[`docs/MODEL_CARD.md`](docs/MODEL_CARD.md). Current status:
 [`docs/STATUS_AND_ROADMAP.md`](docs/STATUS_AND_ROADMAP.md).
 
 > Can a small model (Qwen2.5-3B-Instruct), QLoRA fine-tuned on a single
