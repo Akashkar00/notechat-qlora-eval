@@ -37,3 +37,11 @@ unsloth_compiled_cache/
 
 # editor
 .vscode/
+
+# personal Claude Code session transcripts — not a project deliverable
+claude-chat/
+
+# personal documents that happen to sit in this working dir — this repo is
+# public, so keep CVs/cover letters out of it by default
+CV.tex
+*.pdf

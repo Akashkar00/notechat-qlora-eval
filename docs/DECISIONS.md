@@ -413,16 +413,25 @@ test records:
 parameters) on every metric, every CI excluding zero.** Scaling 3B→14B
 zero-shot bought +0.154 ROUGE-1; QLoRA fine-tuning the 3B model bought
 +0.341 — more than double the effect of a ~5x parameter increase, on this
-task and this similarity measure. This is the thesis in `PROJECT_SPEC.md`
-§0 confirmed by an actual paired statistical test, not just point estimates
-eyeballed side by side. Same ground-truth caveat as always: measures
-similarity to NoteChat's own LLM-generated reference, not clinical
-correctness.
+task and this similarity measure.
 
-**Still open:** arm 4 (classic/non-LLM baseline) is the only Phase 6 arm
-left — without it, "an LLM wasn't needed at all" remains an untested
-possibility for this task, per the spec's explicit instruction not to skip
-that arm even though the LLM arms now look strong.
+**How strongly this should be stated (revised 2026-08-27).** An earlier
+version of this entry called it "the thesis in `PROJECT_SPEC.md` §0
+confirmed." That overstates it, and the overstatement is worth correcting
+in place rather than quietly leaving. What was actually measured is
+*similarity to NoteChat's house style*, and arm 3 trained on 8,000 examples
+of exactly that style while the 14B model has never seen it. Winning that
+comparison is close to structurally guaranteed and is not the same claim as
+"a 3B model is better at generating clinical dialogue." The honest
+statement is narrower:
+
+> QLoRA fine-tuning adapts a 3B model to a target corpus's format and style
+> far more effectively than a ~5x parameter increase does, at a fraction of
+> the serving cost.
+
+That is still a genuinely useful, non-obvious, and correctly-evidenced
+finding — it just isn't a claim about general capability. Arm 4 (below)
+tests the same skepticism from the other direction.
 
 **Fixed:** `tests/test_data.py::test_load_raw_rejects_unexpected_columns`
 hardcoded `/tmp/_bad_schema_test.csv`, which doesn't exist on this Windows
@@ -445,3 +454,123 @@ grounded in the source note) is a hallucination/faithfulness check — and
 that was explicitly *not* implemented in this pass, only recorded as future
 work above. So the out-of-order build left a documented gap (no
 hallucination metric yet) but did not bias what *was* measured.
+
+---
+
+## Rigor pass — greedy decoding, faithfulness, arm 4, Phase 3 (2026-08-27)
+
+A deliberate pass over the project's own weak points rather than new
+features. Each item below was a thing an informed reader could have
+attacked, listed with what was done about it.
+
+**1. Evaluation was stochastic, so no number was reproducible.**
+`local_hf.generate` defaulted to `do_sample=True, temperature=0.7`. That
+quietly broke two claims this repo makes. `PROJECT_SPEC.md` §1.2 requires
+every metric to be reproducible by a single documented command — but a
+rerun produced different numbers. And `metrics.bootstrap_ci` resamples
+records as though each record's score were a fixed quantity, when it was
+actually one draw from a distribution, so the published intervals
+understated true uncertainty. Changed the default to greedy
+(`do_sample=False`), added an explicit `--sample` opt-in, recorded the
+decode config inside every `results.json`, and made `compare.py` print a
+warning if it is ever handed a stochastically-decoded arm. **All arms were
+re-run from scratch under greedy decoding**; the numbers in `README.md` are
+from that rerun, and the earlier sampled numbers are superseded.
+
+**2. The comparison numbers were the one thing nobody could regenerate.**
+The paired deltas in `README.md` came from a throwaway script, violating
+§1.2 in the middle of the results table. Added `src/eval/compare.py` (`python
+-m src.eval.compare`), which discovers every `artifacts/eval/*/results.json`,
+**asserts the arms were scored on identical records before comparing**
+(silently intersecting mismatched runs would produce a confident-looking
+delta over whatever happened to overlap), computes all pairwise deltas, and
+emits both `comparison.json` and the `comparison.md` table.
+
+**3. A known failure mode was documented but never measured.** The Phase 5
+sanity check caught the fine-tuned model inventing an ungrounded aside, and
+that finding sat as a footnote. Every metric in the harness compared
+generations to the *reference dialogue*, which is itself LLM-generated
+(§4.2) — so nothing could see fabrication at all. Added
+`src/eval/faithfulness.py`, which scores against the **clinical note**, the
+one real artifact in the dataset: `numeric_grounding_recall` (did the
+dialogue carry over the note's numbers), `numeric_precision`, and
+`fabricated_number_rate`. Numbers were chosen because clinical notes are
+number-dense and a numeric claim is unambiguously checkable, unlike
+paraphrase. Deliberately *not* an LLM-as-judge, which would reintroduce the
+exact "grade one model with another model" problem §4.2 warns about. It is
+a proxy and is documented as one.
+
+**4. Arm 4 existed only as an excuse.** `src/baselines/` was an empty
+`__init__.py` while the write-up claimed a four-arm comparison. Added
+`TfidfRetrievalBaseline`: fit TF-IDF on the training notes, and for a test
+note return the conversation attached to the most cosine-similar training
+note. No model, no GPU, deterministic. Fitted on **train only** — retrieving
+from a pool containing the query would make the arm trivially and
+meaninglessly perfect.
+
+**This arm produced the most interesting result in the project.** On a
+5-record smoke test it scored ROUGE-1 ~0.46 — *higher than the zero-shot
+14B model's 0.445* — while fabricating ~59% of the numbers it stated and
+carrying over only ~14% of the note's own numbers. A method with no model
+at all beats a 14B LLM on the headline metric, because the retrieved
+dialogue is fluent, correctly formatted, on-topic, and about **the wrong
+patient**. That is direct evidence that ROUGE/BERTScore on this task
+substantially measure style-matching rather than quality, which is exactly
+the skepticism §5 Phase 6 asks arm 4 to test, and it is the strongest
+available justification for having built the faithfulness metric.
+
+**5. Phase 3 was never started.** Added `src/eval/contamination.py`.
+NoteChat is public and its notes come from PMC-Patients, so the base model
+may have memorized the corpus — which would mean fine-tuning gains partly
+reflect recall, not learning. Method: feed the **base** model the first half
+of a held-out dialogue as raw text (no chat template — probing the LM's
+memory, not its instruction-following), continue greedily, and measure
+ROUGE-L against the true second half. Crucially it scores the *same*
+generation against a **randomly chosen other** dialogue's second half as a
+control: NoteChat dialogues are formulaic, so any competent model scores
+well above zero without memorizing anything, and only the gap between true
+and control is evidence. Reported as a paired bootstrap delta with a CI, so
+"no evidence of contamination" is measured rather than asserted.
+
+**6. `src/train/train.py` still described CUAD.** The longest-standing open
+item in this log. Rewritten for NoteChat, and it now **imports
+`SYSTEM_PROMPT` / `build_user_prompt` from `src/inference/local_hf.py`
+instead of defining its own copies** — the duplicate definitions are what
+let training and evaluation drift apart in the first place. Also added an
+explicit `trainer.evaluate()` after `trainer.train()`, because the notebook
+run of this same config left no epoch-2 `eval_loss` in `trainer_state.json`
+(open item below), making the final validation loss unrecoverable without
+retraining; an explicit call means that number always exists regardless of
+callback scheduling. Training history is now persisted to
+`train_history.json` next to the adapter, which survives `save_total_limit`
+pruning the checkpoint dirs.
+
+**7. "Why 200 of 1,000 test records?" had no answer.** Now justified
+quantitatively in `configs/eval.yaml`: at n=200 the observed 95% CI
+half-width on ROUGE-1 is ~±0.008 against effect sizes of +0.19 to +0.34 —
+25-40x the interval width. Scoring all 1,000 would cost 5x the GPU time
+(the 14B arm alone: ~1.6h → ~8h) to narrow intervals by only sqrt(5) ≈ 2.2x,
+moving no conclusion.
+
+**8. Windows encoding bug, found by running the new code.**
+`compare.py`'s report write crashed with `UnicodeEncodeError` because
+Windows defaults `write_text` to cp1252, which cannot encode the minus sign
+the table uses — the whole comparison would have died at its last step
+after a 3.5-hour run. All report/results writes now pass
+`encoding="utf-8"` explicitly. Same class of latent Windows bug as the
+hardcoded `/tmp` path fixed earlier.
+
+**Test suite: 24 → 46 tests**, all passing. New coverage: numeric
+faithfulness (including hand-computed partial-overlap and the vacuous
+no-numbers cases), the retrieval baseline (topical correctness,
+determinism, fit-before-predict failing loudly, and a test pinning the
+*structural weakness* that it carries the wrong patient's numbers), and
+`compare.py`'s mismatched-record guard.
+
+**Still open after this pass:** the missing epoch-2 `eval_loss` in the
+existing adapter's `trainer_state.json` is still unexplained — the rewritten
+CLI trainer prevents a recurrence, but diagnosing the original would require
+retraining, which is not worth 4+ GPU-hours to recover one number that the
+held-out test evaluation supersedes anyway. `docs/ARCHITECTURE.md` still
+carries pre-pivot CUAD diagrams. No LoRA rank / epoch-count ablations have
+been run.

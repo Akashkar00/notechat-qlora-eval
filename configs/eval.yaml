@@ -6,14 +6,28 @@ bootstrap:
 calibration:
   n_bins: 15
 
-# Fill in if the output is structured (schema.py / grounding.py apply).
-# Leave null and delete the corresponding eval module if not applicable.
+# Not applicable to this task: the output is free-form dialogue, so there is
+# no structured schema to validate (PROJECT_SPEC.md §4). src/eval/schema.py
+# and grounding.py were never written for the same reason. The structural
+# analogue that *does* apply is metrics.turn_format_validity, and the
+# correctness analogue is eval/faithfulness.py, scored against the clinical
+# note rather than the (synthetic) reference dialogue.
 schema:
   enabled: false
   codes_field: null
   code_field: null
   evidence_field: null
 
-# Size of the held-out set used for the Phase 2 acceptance run — shrink if
-# the real dataset (docs/data_report.md) turns out smaller than this.
+# How many held-out test records each arm scores.
+#
+# The test split holds 1,000 notes (docs/data_report.md); 200 is a deliberate
+# subsample, not a shortcut. At n=200 the observed 95% bootstrap CI half-width
+# on ROUGE-1 is ~±0.008, while the effects being measured are +0.19 to +0.34 —
+# roughly 25-40x the interval width, so every conclusion is resolved with a
+# very wide margin. Scoring all 1,000 would cost 5x the GPU time (the 14B arm
+# alone goes from ~1.6h to ~8h) to narrow intervals by only sqrt(5) ~ 2.2x,
+# which would not move a single finding.
+#
+# Raise this if a future comparison has a genuinely small effect size, where
+# the intervals would otherwise overlap.
 val_records: 200

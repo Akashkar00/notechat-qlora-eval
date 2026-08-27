@@ -53,8 +53,22 @@ def generate(
     note_row: dict,
     max_new_tokens: int = 512,
     temperature: float = 0.7,
-    do_sample: bool = True,
+    do_sample: bool = False,
 ) -> str:
+    """Generate one dialogue from one clinical note.
+
+    `do_sample` defaults to **False** (greedy decoding) for evaluation.
+    Sampling makes every score a single draw from a distribution rather than
+    a fixed quantity, which quietly breaks two things the eval harness
+    claims: `metrics.bootstrap_ci` resamples records as if each record's
+    score were fixed (so its intervals would understate the true
+    uncertainty), and `PROJECT_SPEC.md` §1.2's "every metric must be
+    reproducible by a single documented command" would be false — a rerun
+    would print different numbers. Greedy decoding costs some output
+    diversity, which does not matter here because nothing downstream
+    rewards diversity. Pass `do_sample=True` deliberately if you want
+    sampling (e.g. a qualitative spot-check).
+    """
     import torch
 
     messages = [
@@ -64,12 +78,18 @@ def generate(
     inputs = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
     ).to(model.device)
+
+    # Only pass sampling knobs when actually sampling — transformers warns
+    # (and in some versions errors) if temperature is set with do_sample=False.
+    gen_kwargs = {"do_sample": do_sample}
+    if do_sample:
+        gen_kwargs["temperature"] = temperature
+
     with torch.no_grad():
         output = model.generate(
             input_ids=inputs,
             max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            do_sample=do_sample,
             pad_token_id=tokenizer.eos_token_id,
+            **gen_kwargs,
         )
     return tokenizer.decode(output[0][inputs.shape[1] :], skip_special_tokens=True)

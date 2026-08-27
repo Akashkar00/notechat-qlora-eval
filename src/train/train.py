@@ -1,19 +1,21 @@
 """Phase 5 — QLoRA fine-tuning (PROJECT_SPEC.md §5 Phase 5).
 
-Task (PROJECT_SPEC.md §4): given a contract's full text, generate every
-{clause_type, evidence_span} pair for clause types present, where
-evidence_span is a verbatim substring of the input (checked by
-src/eval/grounding.py at eval time). Multi-span clause types (see
-docs/data_report.md) get one output entry per span, not one per clause
-type — collapsing to one span per type would silently drop ground truth
-the model is supposed to learn to produce.
+Task (PROJECT_SPEC.md §4): given a clinical note, generate a realistic
+doctor-patient dialogue as alternating `Doctor:`/`Patient:` turns.
 
-Model + hyperparameters: configs/train.yaml. model_name was left unset
-there deliberately (PROJECT_SPEC.md §5 — "confirm at build time, do not
-assume"); it is passed on the command line instead of hardcoded here so
-the choice stays visible in the run command, not buried in a config diff.
+**Prompt logic is imported from `src/inference/local_hf.py`, not redefined
+here.** Training and evaluation must agree on the system prompt and user
+prompt exactly — if they drift, the fine-tune is optimised for one format
+and scored on another, and the resulting numbers are quietly meaningless.
+This module previously carried its own copy (of a different task's prompts,
+no less) and drifted for days; importing is what stops that recurring.
 
-Run: python -m src.train.train --model-name Qwen/Qwen2.5-3B-Instruct
+Model + hyperparameters: configs/train.yaml. `model_name` is passed on the
+command line rather than hardcoded, so the choice stays visible in the run
+command (PROJECT_SPEC.md §5 — "confirm at build time, do not assume").
+
+Run:
+    python -m src.train.train --model-name unsloth/Qwen2.5-3B-Instruct-bnb-4bit
 """
 
 import argparse
@@ -23,60 +25,38 @@ from pathlib import Path
 import polars as pl
 import yaml
 
+from src.inference.local_hf import SYSTEM_PROMPT, build_user_prompt
+
 CONFIG_PATH = Path("configs/train.yaml")
 TRAIN_PARQUET = Path("data/processed/train.parquet")
 VAL_PARQUET = Path("data/processed/val.parquet")
 ADAPTER_OUT = Path("artifacts/adapters")
 
-SYSTEM_PROMPT = (
-    "You are a contract review assistant. Given the full text of a commercial "
-    "contract and a fixed list of clause types, identify every clause type that "
-    "is present and, for each, quote the exact verbatim text span from the "
-    "contract that supports it. A clause type may appear more than once if it "
-    "has multiple supporting spans. Output ONLY a JSON array of objects with "
-    'keys "clause_type" and "evidence_span" — no other text. If no listed '
-    "clause type is present, output an empty JSON array: []."
-)
-
-
-def label_space_from(df: pl.DataFrame) -> list[str]:
-    """Derive the closed 41-type taxonomy from the data itself (OPEN_DECISIONS
-    #1 — fixed list, not empirically derived) rather than hardcoding it, so a
-    schema change in build_dataset.py can't silently drift out of sync."""
-    row = df.row(0, named=True)
-    space = sorted(set(row["clause_types_present"]) | set(row["clause_types_absent"]))
-    assert len(space) == 41, f"expected CUAD's 41 clause types, got {len(space)}"
-    return space
-
 
 def build_target(row: dict) -> str:
-    pairs = [
-        {"clause_type": clause["clause_type"], "evidence_span": span}
-        for clause in row["clause_labels"]
-        for span in clause["evidence_spans"]
-    ]
-    return json.dumps(pairs, ensure_ascii=False)
+    """The assistant turn the model learns to produce: the dialogue itself.
+
+    No JSON wrapper, no schema — this task's output is free-form text
+    (contrast the CUAD version this file used to hold, which emitted a JSON
+    array of clause/evidence pairs).
+    """
+    return row["conversation"]
 
 
-def build_user_prompt(row: dict, label_space: list[str]) -> str:
-    types_list = "\n".join(f"- {t}" for t in label_space)
-    return f"Clause types to check for:\n{types_list}\n\nContract text:\n{row['context']}"
-
-
-def to_chat_text(row: dict, label_space: list[str], tokenizer) -> str:
+def to_chat_text(row: dict, tokenizer) -> str:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_user_prompt(row, label_space)},
+        {"role": "user", "content": build_user_prompt(row)},
         {"role": "assistant", "content": build_target(row)},
     ]
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
 
 
-def load_split(path: Path, label_space: list[str], tokenizer):
+def load_split(path: Path, tokenizer):
     from datasets import Dataset
 
     df = pl.read_parquet(path)
-    texts = [to_chat_text(row, label_space, tokenizer) for row in df.iter_rows(named=True)]
+    texts = [to_chat_text(row, tokenizer) for row in df.iter_rows(named=True)]
     return Dataset.from_dict({"text": texts})
 
 
@@ -85,7 +65,7 @@ def main() -> None:
     parser.add_argument(
         "--model-name",
         required=True,
-        help="HF checkpoint id, e.g. Qwen/Qwen2.5-3B-Instruct. Not defaulted — "
+        help="HF checkpoint id, e.g. unsloth/Qwen2.5-3B-Instruct-bnb-4bit. Not defaulted — "
         "PROJECT_SPEC.md §5 requires confirming this at build time, not assuming it.",
     )
     args = parser.parse_args()
@@ -123,9 +103,8 @@ def main() -> None:
         max_seq_length=cfg["max_seq_len"],
     )
 
-    label_space = label_space_from(pl.read_parquet(TRAIN_PARQUET))
-    train_ds = load_split(TRAIN_PARQUET, label_space, tokenizer)
-    val_ds = load_split(VAL_PARQUET, label_space, tokenizer) if VAL_PARQUET.exists() else None
+    train_ds = load_split(TRAIN_PARQUET, tokenizer)
+    val_ds = load_split(VAL_PARQUET, tokenizer) if VAL_PARQUET.exists() else None
 
     run_dir = ADAPTER_OUT / args.model_name.replace("/", "__")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -162,12 +141,39 @@ def main() -> None:
         processing_class=tokenizer,
     )
 
-    print(f"Training {args.model_name} on {len(train_ds)} contracts -> {run_dir}")
+    print(f"Training {args.model_name} on {len(train_ds)} notes -> {run_dir}")
     trainer.train()
 
-    model.save_pretrained(str(run_dir / "final_adapter"))
-    tokenizer.save_pretrained(str(run_dir / "final_adapter"))
-    print(f"Saved adapter to {run_dir / 'final_adapter'}")
+    # Explicit final evaluation. The notebook run of this same config left no
+    # epoch-2 eval_loss in trainer_state.json (see docs/DECISIONS.md), which
+    # made the final validation loss unrecoverable without retraining.
+    # Calling evaluate() directly means the last number always exists,
+    # regardless of how the callback-driven eval schedule behaves.
+    final_metrics = {}
+    if val_ds is not None:
+        final_metrics = trainer.evaluate()
+        print(f"Final validation metrics: {final_metrics}")
+
+    final_dir = run_dir / "final_adapter"
+    model.save_pretrained(str(final_dir))
+    tokenizer.save_pretrained(str(final_dir))
+
+    # Persist the loss curve next to the adapter so a training run's history
+    # survives independently of the checkpoint dirs, which save_total_limit
+    # prunes.
+    (run_dir / "train_history.json").write_text(
+        json.dumps(
+            {
+                "model_name": args.model_name,
+                "config": cfg,
+                "final_eval": final_metrics,
+                "log_history": trainer.state.log_history,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(f"Saved adapter to {final_dir}")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ criterion. BERTScore is excluded (needs a downloaded roberta-large scorer
 model) — exercised instead via run_eval.py's end-to-end acceptance run.
 """
 
+from src.eval.faithfulness import extract_numbers, numeric_faithfulness
 from src.eval.metrics import bootstrap_ci, paired_bootstrap_delta, rouge, turn_format_validity
 
 
@@ -104,3 +105,63 @@ def test_paired_bootstrap_delta_rejects_mismatched_lengths():
 
     with pytest.raises(ValueError):
         paired_bootstrap_delta([0.1, 0.2], [0.1], n_resamples=10)
+
+
+# --- Faithfulness proxy (src/eval/faithfulness.py) ---
+
+
+def test_extract_numbers_finds_integers_and_decimals():
+    assert extract_numbers("BP 135/85, temp 37.2, age 64") == {"135", "85", "37.2", "64"}
+
+
+def test_extract_numbers_normalizes_trailing_zero_decimals():
+    # 5.0 and 5 are the same clinical claim written two ways; they must not
+    # count as a match failure.
+    assert extract_numbers("dose 5.0 mg") == extract_numbers("dose 5 mg") == {"5"}
+
+
+def test_extract_numbers_splits_compound_values():
+    # "135/85" is two separately-checkable claims, and "64-year-old" carries
+    # a real number that should be verifiable.
+    assert extract_numbers("a 64-year-old with BP 135/85") == {"64", "135", "85"}
+
+
+def test_numeric_faithfulness_perfect_when_all_numbers_carried_over():
+    note = "A 64-year-old man. Blood pressure was 135/85 mmHg."
+    gen = "Doctor: You're 64, and your blood pressure was 135/85."
+    result = numeric_faithfulness(gen, note)
+    assert result["numeric_grounding_recall"] == 1.0
+    assert result["numeric_precision"] == 1.0
+    assert result["fabricated_number_rate"] == 0.0
+
+
+def test_numeric_faithfulness_detects_fabricated_values():
+    note = "A 64-year-old man. Blood pressure was 135/85 mmHg."
+    gen = "Doctor: You're 70, and your blood pressure was 200/110."
+    result = numeric_faithfulness(gen, note)
+    # Nothing shared: note {64,135,85} vs generation {70,200,110}
+    assert result["numeric_grounding_recall"] == 0.0
+    assert result["numeric_precision"] == 0.0
+    assert result["fabricated_number_rate"] == 1.0
+
+
+def test_numeric_faithfulness_hand_computed_partial_overlap():
+    note = "Age 50. Pulse 80. Temp 37."          # {50, 80, 37}
+    gen = "Doctor: you are 50 and your pulse is 80, weight 99."  # {50, 80, 99}
+    result = numeric_faithfulness(gen, note)
+    assert result["numeric_grounding_recall"] == 2 / 3   # 50, 80 carried over; 37 missed
+    assert result["numeric_precision"] == 2 / 3          # 99 fabricated
+    assert abs(result["fabricated_number_rate"] - 1 / 3) < 1e-9
+
+
+def test_numeric_faithfulness_generation_with_no_numbers_fabricates_nothing():
+    result = numeric_faithfulness("Doctor: How are you? Patient: Fine.", "A 64-year-old man.")
+    assert result["numeric_precision"] == 1.0       # stated nothing, so invented nothing
+    assert result["fabricated_number_rate"] == 0.0
+    assert result["numeric_grounding_recall"] == 0.0  # but carried none of the note's specifics
+
+
+def test_numeric_faithfulness_reports_counts():
+    result = numeric_faithfulness("pulse 80", "Age 50. Pulse 80.")
+    assert result["n_note_numbers"] == 2
+    assert result["n_generated_numbers"] == 1

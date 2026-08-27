@@ -1,11 +1,13 @@
-# Architecture — On-Prem Fine-Tuning on Company Data
+# Architecture — NoteChat clinical dialogue generation
 
-Full system architecture for the project defined in `PROJECT_SPEC.md`. This
-document is a placeholder cloned from `clinical-coding-eval`'s
-`ARCHITECTURE.md` — rewrite the diagrams below once `OPEN_DECISIONS` in
-`PROJECT_SPEC.md` is filled in and the task is concrete. The one part that
-should survive unchanged regardless of task: **everything stays local**
-unless `OPEN_DECISIONS` #3 explicitly permits otherwise.
+System architecture for the project defined in `PROJECT_SPEC.md`. Rewritten
+2026-08-27 for the NoteChat task; earlier revisions of this file described
+CUAD contract-clause extraction, which this project pivoted away from on
+2026-08-24 (see `DECISIONS.md`, "Task pivot").
+
+The invariant that survived the pivot: **everything runs on the local
+machine.** No data, and no derivative of it, is sent to a third-party API
+(`PROJECT_SPEC.md` §1.1).
 
 ---
 
@@ -13,147 +15,202 @@ unless `OPEN_DECISIONS` #3 explicitly permits otherwise.
 
 ```mermaid
 flowchart TD
-    A[Company data source\nsee OPEN_DECISIONS #2] --> B[Data Pipeline\nPhase 1]
-    B --> C[(Clean dataset\ntrain / val / test\nsplit on the correct key)]
+    RAW["NoteChat our_revised_v2.csv<br/>10,000 clinical notes<br/>(gitignored)"] --> BUILD["Phase 1<br/>src/data/build_dataset.py"]
+    BUILD --> SPLIT[("train 8,000 / val 1,000 / test 1,000<br/>split by note_id, seed 42")]
+    BUILD --> DREPORT["docs/data_report.md"]
 
-    C --> D[Eval Harness\nPhase 2]
-    C --> E[Four Model Arms\nPhase 5 + 6]
+    SPLIT --> TRAIN["Phase 5<br/>QLoRA fine-tune"]
+    TRAIN --> ADAPTER[("LoRA adapter")]
 
-    E --> D
-    D --> F[Results:\nmetrics + confidence intervals]
-    F --> G[Write-up\nREADME, MODEL_CARD\nPhase 7]
+    SPLIT --> HARNESS["Phase 2<br/>Eval harness"]
+    ADAPTER --> HARNESS
+    HARNESS --> RESULTS["Phase 6<br/>4 arms compared"]
+    RESULTS --> WRITEUP["Phase 7<br/>README, MODEL_CARD"]
 
-    style A fill:#f8d7da,stroke:#b4545a,stroke-width:2px,color:#1a1a1a
-    style G fill:#d3edda,stroke:#3f8f57,stroke-width:2px,color:#1a1a1a
+    SPLIT --> CONTAM["Phase 3<br/>contamination probe"]
+    CONTAM --> WRITEUP
+
+    style RAW fill:#f8d7da,stroke:#b4545a,stroke-width:2px,color:#1a1a1a
+    style WRITEUP fill:#d3edda,stroke:#3f8f57,stroke-width:2px,color:#1a1a1a
 ```
-
-**Everything inside the dashed boundary below runs on the local machine
-only, unless `OPEN_DECISIONS` #3 explicitly permits an external API for a
-named, non-sensitive subset of the data.**
 
 ```mermaid
 flowchart LR
-    subgraph LOCAL["This computer only — no network calls with company data"]
+    subgraph LOCAL["This machine only — no network calls with task data"]
         direction TB
-        P1[Data Pipeline]
-        P2[Eval Harness]
-        P3[Model Inference\n& Training]
+        P1[Data pipeline]
+        P2[Eval harness]
+        P3[Training & inference]
         P1 --> P2
         P1 --> P3
         P3 --> P2
     end
-    EXT[External APIs\nOpenAI / Anthropic / etc.]
-    LOCAL -. NEVER\nunless OPEN_DECISIONS #3\nsays otherwise .-> EXT
+    EXT["External APIs<br/>OpenAI / Anthropic / etc."]
+    LOCAL -. NEVER .-> EXT
 
     style EXT fill:#f8d7da,stroke:#900,stroke-width:2px,stroke-dasharray: 5 5,color:#1a1a1a
 ```
 
+NoteChat is public research data, so this is a *practised discipline* rather
+than a legal requirement for this specific corpus — stated plainly in
+`PROJECT_SPEC.md` §7a item 3 so it is never misrepresented as a compliance
+finding. The harness is built as though the constraint were real, because
+demonstrating that correctly is part of the deliverable.
+
 ---
 
-## 2. Phase 1 — Data pipeline (placeholder, task-dependent)
+## 2. Phase 1 — Data pipeline
 
 ```mermaid
 flowchart TD
-    A1[Raw company data\nsee OPEN_DECISIONS #2] --> B1[Filter to\nin-scope population]
-    B1 --> C1[Derive label / output\nspace, see PROJECT_SPEC §4.1]
-    C1 --> D1[Deduplicate\nif applicable]
-    D1 --> E1[Split on the correct\ngrouping key, OPEN_DECISIONS #5]
-    E1 --> F1[(train.parquet\nval.parquet\ntest.parquet)]
-
-    E1 --> G1[test_data.py\nasserts zero overlap\nacross splits on the\ngrouping key]
-    D1 --> H1[docs/data_report.md\ncoverage, distribution,\ndedup count]
+    A["our_revised_v2.csv<br/>columns: data, conversation"] --> B["Validate schema<br/>fail loudly on unexpected columns"]
+    B --> C["Drop exact-duplicate notes<br/>by SHA-256 content hash"]
+    C --> D["Strip generation-artifact preamble<br/>before first Doctor:/Patient: marker"]
+    D --> E["Split 80/10/10 by note_id<br/>seed 42"]
+    E --> F[("train / val / test .parquet")]
+    E --> G["tests/test_data.py<br/>asserts zero note_id overlap"]
+    C --> H["docs/data_report.md<br/>lengths, turn counts, dedup"]
 ```
 
-**Why splitting on the right key matters:** if the same grouping unit
-(customer, document source, whatever `OPEN_DECISIONS` #5 names) appears in
-both train and test, the model can cheat by memorizing that unit instead of
-learning the task.
+Each row is one unique clinical note, so splitting by row *is* splitting by
+source document — simpler than the CUAD case, where one contract carried
+many annotation rows and row-level splitting would have leaked.
 
 ---
 
-## 3. Phase 2 — Evaluation harness (built and tested *before* any model runs)
+## 3. Phase 2 — Eval harness
+
+The harness is the actual deliverable (`PROJECT_SPEC.md` §0). The model is
+evidence that it works.
 
 ```mermaid
 flowchart TD
-    IN[Model output] --> M1[schema.py\nvalid structured output?\nif applicable]
-    IN --> M2[grounding.py\nis any evidence/citation\nverifiable? if applicable]
-    IN --> M3[metrics.py\ntask metric(s)\n+ bootstrap confidence intervals]
-    IN --> M4[cost / latency\ntokens per second,\nVRAM used, time per record]
+    IN["One arm's generation"] --> M1["metrics.rouge<br/>ROUGE-1/2/L vs. reference"]
+    IN --> M2["metrics.bertscore<br/>semantic similarity vs. reference"]
+    IN --> M3["metrics.turn_format_validity<br/>is it a Doctor:/Patient: dialogue?"]
+    IN --> M4["faithfulness.numeric_faithfulness<br/>vs. the CLINICAL NOTE"]
+    IN --> M5["cost: tok/s, peak VRAM, wall-clock"]
 
-    M1 & M2 & M3 & M4 --> OUT[run_eval.py\none combined results.json\nper model arm]
+    M1 & M2 & M3 & M4 & M5 --> AGG["metrics.bootstrap_ci<br/>1,000 resamples, 95% percentile"]
+    AGG --> OUT[("artifacts/eval/{arm}/results.json")]
+    OUT --> CMP["eval.compare<br/>paired_bootstrap_delta across arms"]
+    CMP --> CMPOUT[("comparison.json + comparison.md")]
+
+    style M4 fill:#fff3cd,stroke:#b8860b,stroke-width:2px,color:#1a1a1a
 ```
 
-Each metric module has its own unit tests, checked against hand-computed
-examples first, so the scoring code is trusted before it ever touches a
-real model.
+**Two families of metric, measuring different things.** ROUGE and BERTScore
+compare the generation to the *reference dialogue*, which is itself
+LLM-generated (§4.2) — they measure similarity to one synthetic exemplar.
+`faithfulness.py` (highlighted) instead scores against the *clinical note*,
+which is real, and is the only thing in the harness that can detect a fluent
+fabrication. Arm 4 exists largely to prove that distinction matters.
+
+`schema.py` and `grounding.py` from the original template were never written:
+free-form dialogue has no structured schema to validate and no verbatim
+evidence spans to verify (`configs/eval.yaml` records this).
+
+Every metric module is unit-tested against hand-computed examples before it
+scores a real model — 46 tests in `tests/`.
 
 ---
 
-## 4. Phase 5 & 6 — The four things being compared
+## 4. Phase 6 — The four arms
 
 ```mermaid
 flowchart TD
-    REC[Company data record] --> ARM1
-    REC --> ARM2
-    REC --> ARM3
-    REC --> ARM4
+    REC["One held-out clinical note"] --> ARM1 & ARM2 & ARM3 & ARM4
 
-    subgraph ARM1["Arm 1 — Zero-shot small model"]
-        A1[Small model, untrained\nfloor / baseline]
+    subgraph ARM1["Arm 1 — floor"]
+        A1["Zero-shot Qwen2.5-3B<br/>4-bit"]
     end
-    subgraph ARM2["Arm 2 — Zero-shot large baseline"]
-        A2[Larger open-weight model\nsee OPEN_DECISIONS #7]
+    subgraph ARM2["Arm 2 — scale comparison"]
+        A2["Zero-shot Qwen2.5-14B<br/>4-bit, ~4.7x params"]
     end
-    subgraph ARM3["Arm 3 — Fine-tuned small model — the contribution"]
-        A3[Small model\n+ QLoRA fine-tune]
+    subgraph ARM3["Arm 3 — the contribution"]
+        A3["QLoRA fine-tuned<br/>Qwen2.5-3B"]
     end
-    subgraph ARM4["Arm 4 — Classic approach"]
-        A4[Non-LLM baseline\nencoder / rules / regex\ntask-dependent]
+    subgraph ARM4["Arm 4 — is an LLM needed?"]
+        A4["TF-IDF nearest-neighbour<br/>retrieval, no model"]
     end
 
-    ARM1 --> SCORE[Eval Harness]
-    ARM2 --> SCORE
-    ARM3 --> SCORE
-    ARM4 --> SCORE
-    SCORE --> COMPARE[Paired bootstrap:\nis Arm 3 really better\nthan Arm 1 / 2 / 4?\nreport the delta + CI]
+    ARM1 & ARM2 & ARM3 & ARM4 --> SCORE["Eval harness"]
+    SCORE --> COMPARE["Paired bootstrap:<br/>every pairwise delta + CI"]
+
+    style ARM3 fill:#d3edda,stroke:#3f8f57,stroke-width:2px,color:#1a1a1a
+    style ARM4 fill:#fff3cd,stroke:#b8860b,stroke-width:2px,color:#1a1a1a
 ```
 
-**The honest possible outcomes, all of which are valid findings:**
-- Arm 3 (fine-tuned small model) matches or beats Arm 2 (large model) → the
-  thesis holds.
-- Arm 4 (classic approach) beats everything → "the right tool for this task
-  isn't a generative LLM at all," reported prominently, not buried.
+All four arms score the **same** 200 test records, and `compare.py` refuses
+to run if that stops being true — a paired bootstrap over differently-sampled
+arms would still produce a confident-looking number.
+
+**Arm 4 is not a formality.** A retrieval baseline with no model outscores
+the zero-shot 14B on ROUGE-1, because a retrieved dialogue is fluent,
+correctly formatted, on-topic — and about the wrong patient. It is the
+cleanest demonstration in the project that reference-similarity metrics are
+not measuring what a reader assumes they measure. See `README.md` Results.
 
 ---
 
-## 5. Code / repo layout
+## 5. Phase 3 — Contamination probe
+
+```mermaid
+flowchart TD
+    D["Held-out reference dialogue"] --> SPLIT2["Split at a turn boundary"]
+    SPLIT2 --> PRE["First half"]
+    SPLIT2 --> TRUE["True second half"]
+    PRE --> BASE["BASE model, raw text<br/>no chat template, greedy"]
+    BASE --> GEN["Generated continuation"]
+    GEN --> CMP1["ROUGE-L vs. true"]
+    GEN --> CMP2["ROUGE-L vs. a RANDOM<br/>other dialogue's second half"]
+    CMP1 & CMP2 --> DELTA["Paired delta + CI<br/>gap means memorization"]
+
+    style CMP2 fill:#fff3cd,stroke:#b8860b,stroke-width:2px,color:#1a1a1a
+```
+
+The control arm is the whole design. NoteChat dialogues are formulaic, so a
+model with zero memorization still scores well above zero against the true
+continuation just by writing plausible generic dialogue. Only the *gap*
+between true and random is evidence of having seen the text before.
+
+---
+
+## 6. Repo layout
 
 ```
 company-finetune-eval/
-├── configs/                 # YAML configs: data, training, eval
+├── configs/              # data.yaml, train.yaml, eval.yaml
+├── data/                 # gitignored — raw CSV + processed parquet
 ├── src/
-│   ├── data/                 # Phase 1 — pipeline
-│   ├── train/                 # Phase 5 — QLoRA fine-tuning
-│   ├── inference/             # Runs any of the 4 arms locally
-│   ├── baselines/              # Arm 4 — classic approach
-│   └── eval/                    # Phase 2 — the harness (section 3 above)
-├── annotation/                  # Phase 4 — guidelines, sampling, kappa (if needed)
-├── tests/                        # pytest — leakage + metric unit tests
+│   ├── data/build_dataset.py      # Phase 1
+│   ├── inference/local_hf.py      # prompts + generation, single source of truth
+│   ├── train/train.py             # Phase 5 CLI (imports prompts from local_hf)
+│   ├── baselines/classic_baseline.py  # Phase 6 arm 4
+│   └── eval/
+│       ├── metrics.py             # ROUGE / BERTScore / format / bootstrap
+│       ├── faithfulness.py        # numeric grounding vs. the note
+│       ├── contamination.py       # Phase 3
+│       ├── run_eval.py            # one arm per run
+│       └── compare.py             # cross-arm paired deltas
+├── scripts/run_all_arms.sh   # reproduces every published number
+├── notebooks/finetune.ipynb  # the training run actually used for Phase 5
+├── artifacts/
+│   ├── adapters/             # LoRA weights (gitignored — large)
+│   └── eval/                 # results.json per arm + comparison (committed)
+├── tests/                    # 46 tests: data, metrics, baselines, compare
 └── docs/
-    ├── DECISIONS.md               # running log: what was chosen and why
-    ├── data_report.md
-    ├── contamination_report.md
-    ├── annotation_report.md
-    └── MODEL_CARD.md
 ```
 
 ---
 
-## 6. What this architecture deliberately does NOT include
+## 7. What this deliberately does NOT include
 
-- No web UI, no API server, no Docker deployment — this is a
-  research/measurement project, not a product.
-- No RAG, no external retrieval, unless the task genuinely requires it and
-  `OPEN_DECISIONS` says so.
-- No cloud inference of any kind on sensitive company data, unless
-  `OPEN_DECISIONS` #3 explicitly permits it for a named subset.
+- No web UI, API server, or Docker deployment — this is a measurement
+  project, judged on rigor rather than deployment surface (`PROJECT_SPEC.md`
+  §8).
+- No RAG. Note that arm 4 *is* retrieval, but as a baseline to argue
+  against, not as a serving architecture.
+- No LLM-as-judge metric: grading one model's output with another model
+  would reintroduce the synthetic-reference problem §4.2 exists to flag.
+- No cloud inference of any kind on task data.

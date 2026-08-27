@@ -94,9 +94,17 @@ README's diagram above as the current one).
 ## Results
 
 All numbers below are read from `artifacts/eval/*/results.json`, produced by
-`run_eval.py` — never hand-written. All three completed arms scored the
-**same 200 test records** (`--n-records 200 --seed 42`), so every comparison
-below is paired.
+`run_eval.py` — never hand-written. All arms scored the **same 200 test
+records** (`--n-records 200 --seed 42`), so every comparison below is paired.
+
+> ⚠️ **These figures are from the superseded stochastic-decoding run and are
+> being regenerated.** Evaluation now defaults to greedy decoding so results
+> are exactly reproducible (see [Reproducibility](#reproducibility)); the
+> table below predates that change and does *not* reproduce under the
+> current default. Arm 4 also landed after these were produced. The rerun
+> (`bash scripts/run_all_arms.sh`) is in progress — this banner comes down
+> when the table is regenerated from it. Flagged rather than silently left
+> standing, per `PROJECT_SPEC.md` §1.2.
 
 ### Per-arm (95% percentile bootstrap CI, 1,000 resamples)
 
@@ -105,7 +113,7 @@ below is paired.
 | 1 — Zero-shot Qwen2.5-3B (4-bit) | 0.291 [0.273, 0.305] | 0.149 [0.141, 0.156] | 0.852 [0.849, 0.853] | 74.5% | 25.0 tok/s | 2.24 GB |
 | 2 — Zero-shot Qwen2.5-14B (4-bit) | 0.445 [0.438, 0.453] | 0.198 [0.194, 0.202] | 0.865 [0.863, 0.867] | 100% | 12.3 tok/s | 10.44 GB |
 | 3 — QLoRA-tuned Qwen2.5-3B (4-bit) | **0.631 [0.622, 0.641]** | **0.405 [0.392, 0.419]** | **0.909 [0.906, 0.911]** | **100%** | 17.2 tok/s | 2.42 GB |
-| 4 — Classic/non-LLM baseline | not built | — | — | — | — | — |
+| 4 — Classic TF-IDF retrieval (no model) | pending rerun | — | — | — | — | — |
 
 ### Arm 3 vs. arm 2 — the actual thesis test
 
@@ -176,33 +184,62 @@ machine, not a design preference).
 
 ## Repro
 
-```bash
-uv sync                      # core + dev deps (this machine)
-uv sync --extra gpu           # + CUDA training stack (Linux/NVIDIA only)
+**Every number in this README is reproduced by one command:**
 
-pytest tests/                                  # test_data.py + test_eval.py, 24/24
+```bash
+bash scripts/run_all_arms.sh     # all 4 arms + the comparison (~3.5 hrs, 12GB card)
+```
+
+Decoding is **greedy**, so a rerun reproduces the numbers exactly rather
+than approximately — see "Reproducibility" below. The individual steps:
+
+```bash
+uv sync                      # core + dev deps
+uv sync --extra gpu           # + CUDA stack for training / 4-bit inference
+
+pytest tests/                 # 51 tests: data, metrics, faithfulness, baselines, compare
 
 python -m src.data.build_dataset               # Phase 1 — see docs/data_report.md
 
-# Phase 2 — one arm per run, results land in artifacts/eval/{arm}/results.json
+# Phase 5 — training (or use notebooks/finetune.ipynb)
+python -m src.train.train --model-name unsloth/Qwen2.5-3B-Instruct-bnb-4bit
+
+# Phase 6 — one arm per run, results land in artifacts/eval/{arm}/results.json
 python -m src.eval.run_eval --arm zero-shot --n-records 200
 python -m src.eval.run_eval --arm finetuned --n-records 200 \
     --adapter artifacts/adapters/unsloth__Qwen2.5-3B-Instruct-bnb-4bit/final_adapter
 
-# Phase 6 arm 2 — larger zero-shot baseline; needs the max_seq_len override,
-# since configs/train.yaml's 4096 was sized for the 3B fine-tune's training
-# context, not a 14B eval (~1.6 hrs for 200 records on a 12GB card)
+# arm 2 needs the max_seq_len override: configs/train.yaml's 4096 was sized
+# for the 3B fine-tune's training context, not a 14B eval (~1.6 hrs / 200 records)
 python -m src.eval.run_eval --arm zero-shot-14b --n-records 200 \
     --model-name unsloth/Qwen2.5-14B-Instruct-bnb-4bit --max-seq-len 2048
+
+# arm 4 — no model, no GPU generation (seconds, not hours)
+python -m src.eval.run_eval --arm classic-tfidf --n-records 200 --baseline tfidf
+
+# Cross-arm paired deltas -> artifacts/eval/comparison.{json,md}
+python -m src.eval.compare
+
+# Phase 3 — contamination probe -> docs/contamination_report.md
+python -m src.eval.contamination
 ```
 
-> **Known gap:** the paired-delta JSON in `artifacts/eval/` was produced by
-> calling `metrics.paired_bootstrap_delta` over the two results files
-> directly. A `src/eval/compare.py` CLI entrypoint, so that step is
-> reproducible from the command line like every other number here, is still
-> to be written.
+### Reproducibility
 
-> **Windows:** `uv sync` (core deps) works natively. `--extra gpu`
+- **Greedy decoding by default.** Sampling would make every score one draw
+  from a distribution: reruns would disagree, and `bootstrap_ci` — which
+  resamples records as if each score were fixed — would understate the true
+  uncertainty. `--sample` opts back in; the choice is recorded in each
+  `results.json`, and `compare.py` warns if it is handed a sampled arm.
+- **Arms must be scored on identical records.** `compare.py` asserts this
+  and refuses to run otherwise, rather than silently intersecting whatever
+  overlaps and reporting a confident-looking delta.
+- **200 of 1,000 test records**, justified quantitatively in
+  `configs/eval.yaml`: CI half-widths are ~25-40x smaller than the effects
+  being measured, so scoring all 1,000 would cost 5x the GPU time to change
+  no conclusion.
+
+> **Windows:** `uv sync` works natively. `--extra gpu`
 > (Unsloth/bitsandbytes QLoRA *training*) does not support native Windows —
 > run it under WSL2 or on a Linux/NVIDIA machine. 4-bit *inference* for the
 > eval arms does run natively.
