@@ -28,9 +28,19 @@ def rouge(generated: str, reference: str) -> dict[str, float]:
 
 def bertscore(generated: list[str], reference: list[str]) -> dict[str, list[float]]:
     """Batched BERTScore P/R/F1 (one triple per generated/reference pair).
-    Imported lazily — downloads/loads a roberta-large scorer model, which
-    unit tests should not have to pay for."""
-    from bert_score import score
+
+    Imported lazily, and shipped in the `gpu` extra rather than the base
+    dependency group: it pulls in torch and downloads a roberta-large
+    scorer. Keeping it out of module scope is what lets the metric unit
+    tests (and CI) run on a machine with no CUDA stack at all.
+    """
+    try:
+        from bert_score import score
+    except ImportError as exc:  # pragma: no cover - environment-dependent
+        raise ImportError(
+            "bert-score is not installed. It ships in the `gpu` extra "
+            "(`uv sync --extra gpu`) because it depends on torch."
+        ) from exc
 
     precision, recall, f1 = score(generated, reference, lang="en", verbose=False)
     return {

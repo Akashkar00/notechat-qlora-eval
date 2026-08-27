@@ -14,8 +14,12 @@ dependencies = [
     "matplotlib>=3.9",
     "pydantic>=2.9",
     "pyyaml>=6.0",
+    # rouge-score is pure-Python (nltk/absl) and stays in the base group so
+    # the metric unit tests run on any machine. bert-score is NOT here: it
+    # depends on torch, which would drag the whole CUDA stack into a plain
+    # `uv sync` and into CI. It lives in the `gpu` extra and is imported
+    # lazily by src/eval/metrics.py.
     "rouge-score>=0.1.2",
-    "bert-score>=0.3.13",
 ]
 
 # GPU/CUDA-locked training stack. Install on an NVIDIA machine (Linux or
@@ -35,6 +39,9 @@ gpu = [
     "trl>=0.11",
     "peft>=0.13",
     "accelerate>=1.0",
+    # Needs torch, so it belongs with the CUDA stack rather than in the base
+    # group — see the note there.
+    "bert-score>=0.3.13",
 ]
 # Pinned exactly (not >=) because abetlen's prebuilt CUDA wheel index only
 # publishes 0.3.4 for cp311/win_amd64 at cu124 — plain `pip install
