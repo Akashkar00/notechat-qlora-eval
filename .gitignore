@@ -1,10 +1,16 @@
 # data & derived artifacts — never commit anything that could contain sensitive company data
-data/
+#
+# Leading slashes matter: an unanchored `data/` matches a directory named
+# `data` at ANY depth, which silently excluded `src/data/` — the entire
+# Phase 1 pipeline — from every commit until CI caught the resulting
+# ModuleNotFoundError. Anchor these to the repo root so they only ignore the
+# top-level directories they are meant to.
+/data/
 *.parquet
 *.csv
 *.jsonl
-models/
-outputs/
+/models/
+/outputs/
 annotation/*.parquet
 annotation/gold*/
 
