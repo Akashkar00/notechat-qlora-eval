@@ -96,89 +96,107 @@ README's diagram above as the current one).
 
 ## Results
 
-All numbers below are read from `artifacts/eval/*/results.json`, produced by
-`run_eval.py` — never hand-written. All arms scored the **same 200 test
-records** (`--n-records 200 --seed 42`), so every comparison below is paired.
-
-> ⚠️ **These figures are from the superseded stochastic-decoding run and are
-> being regenerated.** Evaluation now defaults to greedy decoding so results
-> are exactly reproducible (see [Reproducibility](#reproducibility)); the
-> table below predates that change and does *not* reproduce under the
-> current default. Arm 4 also landed after these were produced. The rerun
-> (`bash scripts/run_all_arms.sh`) is in progress — this banner comes down
-> when the table is regenerated from it. Flagged rather than silently left
-> standing, per `PROJECT_SPEC.md` §1.2.
+All numbers below are read from `artifacts/eval/*/results.json` and
+`artifacts/eval/comparison.json`, produced by `run_eval.py` and
+`compare.py` — never hand-written. All four arms scored the **same 200 test
+records** under **greedy (deterministic) decoding**, and `compare.py`
+verified this before computing any delta, so every comparison below is
+paired and reproducible by `bash scripts/run_all_arms.sh`.
 
 ### Per-arm (95% percentile bootstrap CI, 1,000 resamples)
 
-| Arm | ROUGE-1 | ROUGE-L | BERTScore-F1 | Turn-format validity | Throughput | Peak VRAM |
+| Arm | ROUGE-1 | ROUGE-L | BERTScore-F1 | Numeric grounding recall | Fabricated numbers | Turn-format valid |
 |---|---|---|---|---|---|---|
-| 1 — Zero-shot Qwen2.5-3B (4-bit) | 0.291 [0.273, 0.305] | 0.149 [0.141, 0.156] | 0.852 [0.849, 0.853] | 74.5% | 25.0 tok/s | 2.24 GB |
-| 2 — Zero-shot Qwen2.5-14B (4-bit) | 0.445 [0.438, 0.453] | 0.198 [0.194, 0.202] | 0.865 [0.863, 0.867] | 100% | 12.3 tok/s | 10.44 GB |
-| 3 — QLoRA-tuned Qwen2.5-3B (4-bit) | **0.631 [0.622, 0.641]** | **0.405 [0.392, 0.419]** | **0.909 [0.906, 0.911]** | **100%** | 17.2 tok/s | 2.42 GB |
-| 4 — Classic TF-IDF retrieval (no model) | pending rerun | — | — | — | — | — |
+| 1 — Zero-shot Qwen2.5-3B | 0.289 [0.270, 0.307] | 0.149 [0.139, 0.158] | 0.853 [0.851, 0.856] | 0.069 [0.050, 0.091] | 0.026 [0.008, 0.049] | 81.5% |
+| 2 — Zero-shot Qwen2.5-14B | 0.442 [0.434, 0.451] | 0.200 [0.195, 0.205] | 0.866 [0.864, 0.868] | 0.058 [0.042, 0.074] | 0.020 [0.004, 0.039] | 100% |
+| 3 — QLoRA-tuned Qwen2.5-3B | **0.635 [0.626, 0.644]** | **0.415 [0.403, 0.428]** | **0.910 [0.908, 0.912]** | **0.478 [0.442, 0.513]** | **0.007 [0.000, 0.018]** | **100%** |
+| 4 — Classic TF-IDF retrieval (no model) | 0.461 [0.455, 0.468] | 0.219 [0.214, 0.225] | 0.863 [0.861, 0.865] | 0.145 [0.124, 0.166] | **0.699 [0.655, 0.741]** | 99.5% |
 
 ### Arm 3 vs. arm 2 — the actual thesis test
 
-Not two point estimates side by side, but a confidence interval on the
-per-record difference (`artifacts/eval/comparison_all_arms.json`). This is
-the comparison the project's headline question depends on: does the
-QLoRA-tuned 3B model actually compete with a model ~4.7× its size?
+A confidence interval on the per-record difference, not two point estimates
+eyeballed side by side. This is the comparison the project's headline
+question depends on: does the QLoRA-tuned 3B model actually compete with a
+model ~4.7× its size?
 
 | Metric | Δ (fine-tuned 3B − zero-shot 14B) | 95% CI |
 |---|---|---|
-| ROUGE-1 | +0.186 | [0.174, 0.198] |
-| ROUGE-2 | +0.232 | [0.216, 0.248] |
-| ROUGE-L | +0.208 | [0.193, 0.223] |
-| BERTScore-F1 | +0.043 | [0.040, 0.047] |
+| ROUGE-1 | +0.193 | [+0.181, +0.206] |
+| ROUGE-2 | +0.240 | [+0.226, +0.255] |
+| ROUGE-L | +0.215 | [+0.201, +0.230] |
+| BERTScore-F1 | +0.044 | [+0.041, +0.048] |
+| Numeric grounding recall | **+0.420** | [+0.382, +0.459] |
+| Fabricated numbers | −0.013 | [−0.035, +0.005] (does **not** exclude zero) |
 
-**Every interval excludes zero, in favor of the fine-tuned 3B model.** It
-doesn't just match the 14B zero-shot model — it beats it, on every metric,
-while using ~4× less VRAM and running at higher throughput. Scaling
-3B→14B zero-shot bought +0.154 ROUGE-1 (see full pairwise table in
-`artifacts/eval/comparison_all_arms.json`); QLoRA fine-tuning the 3B model
-bought +0.341 — more than double the effect of a ~5× parameter increase, on
-this task and this similarity measure.
+**Every content metric excludes zero, in favor of the fine-tuned 3B model.**
+It doesn't just match the 14B zero-shot model — it beats it on every
+reference-similarity metric while using ~4× less VRAM and running faster.
+Scaling 3B→14B zero-shot bought +0.153 ROUGE-1 (full pairwise table in
+`artifacts/eval/comparison.md`); QLoRA fine-tuning the 3B model bought
++0.346 — more than double the effect of a ~5× parameter increase.
 
-### Arm 3 vs. arm 1 — fine-tuning vs. its own zero-shot baseline
+**The numeric-grounding delta is the one result here that isn't just style.**
+Fine-tuning didn't only make the model sound more like NoteChat — it
+increased how much of the source note's actual numeric content survives
+into the dialogue nearly 7-fold (7%→48% recall), a gap far too large to be
+sampling noise. The one metric that did **not** move significantly is
+fabrication rate itself: both arms fabricate a small, statistically
+indistinguishable share of the numbers they do state (~1–2%). So: the
+fine-tune got much better at *including* the note's real numbers, not
+measurably better at *avoiding invented* ones. Read those as two separate
+claims, because the data only supports one of them strongly.
 
-| Metric | Δ (fine-tuned − zero-shot 3B) | 95% CI |
+### Arm 4 vs. arm 2 — is a model needed at all?
+
+The skeptical comparison `PROJECT_SPEC.md` §5 Phase 6 requires: a baseline
+with **no model, no training, no GPU** against the larger LLM.
+
+| Metric | Δ (TF-IDF retrieval − zero-shot 14B) | 95% CI |
 |---|---|---|
-| ROUGE-1 | +0.341 | [0.321, 0.359] |
-| ROUGE-2 | +0.269 | [0.255, 0.285] |
-| ROUGE-L | +0.257 | [0.241, 0.272] |
-| BERTScore-F1 | +0.057 | [0.054, 0.060] |
-| Turn-format validity | 74.5% → 100% | — |
+| ROUGE-1 | +0.020 | [+0.010, +0.029] |
+| ROUGE-L | +0.019 | [+0.013, +0.025] |
+| BERTScore-F1 | −0.002 | [−0.005, −0.000] |
+| Numeric grounding recall | +0.087 | [+0.063, +0.112] |
+| Fabricated numbers | **+0.679** | [+0.633, +0.724] |
 
-Every interval excludes zero here too. QLoRA fine-tuning moved this model on
-this task, and the effect is far larger than sampling noise at n=200.
+**Retrieval significantly outscores the 14B LLM on ROUGE-1** (small effect,
+but the CI is entirely positive) **while fabricating 68 percentage points
+more of the numbers it states.** A method with no model, no training run,
+and no GPU wins the headline metric against a 14B-parameter LLM, because a
+retrieved dialogue is fluent, correctly formatted, on-topic — and describes
+a different patient. This is direct evidence that ROUGE/BERTScore on this
+task substantially reward style- and topic-matching, not faithfulness, and
+it is the strongest justification in this repo for building
+`faithfulness.py` in the first place. See `docs/contamination_report.md`
+and `docs/MODEL_CARD.md` for how this should and shouldn't be read.
 
 ### What these numbers do *not* say
 
-Three caveats, in descending order of how much they matter:
-
 1. **The reference is synthetic.** The `conversation` target is itself
    LLM-generated (NoteChat's own multi-agent pipeline), not a human-authored
-   transcript. ROUGE and BERTScore here measure *similarity to one synthetic
+   transcript. ROUGE and BERTScore measure *similarity to one synthetic
    exemplar*, not clinical correctness — see `docs/PROJECT_SPEC.md` §4.2.
-2. **A large part of the gain is style-matching.** Fine-tuning on 8,000
-   NoteChat dialogues teaches the model NoteChat's house style, turn count,
-   and length distribution — which is exactly what ROUGE rewards. The delta
-   above is real, but it is substantially "learned the target corpus's
-   surface form," not "learned medicine."
-3. **There is no faithfulness metric yet.** A qualitative sanity check during
-   Phase 5 caught a fabricated aside with no basis in the source note
-   (`docs/DECISIONS.md`). Nothing in the harness currently measures whether
-   the fine-tune became a *more fluent* fabricator. This is the top-ranked
-   open item.
+2. **Most of the ROUGE gain is style-matching; the grounding gain is not.**
+   Fine-tuning on 8,000 NoteChat dialogues teaches the model NoteChat's
+   house style, turn count, and length distribution — exactly what ROUGE
+   rewards, and arm 4's result proves that reward can be earned without any
+   understanding at all. The numeric-grounding recall jump is a genuine
+   exception: it is a content-level improvement the retrieval baseline
+   cannot fake, since it would require actually reading the query note.
+3. **Faithfulness here means numeric grounding, not general accuracy.** A
+   fabricated diagnosis or finding stated without a number is invisible to
+   `faithfulness.py`. Treat "0.7% fabrication rate" as a floor, not a
+   certificate — see `docs/MODEL_CARD.md`'s limitations section.
 
 ### Cost, not just quality
 
 `unsloth/Qwen2.5-14B-Instruct-bnb-4bit` at `--max-seq-len 2048` fits this
-12 GB card at **10.44 GB peak VRAM**, running at **12.3 tok/s**. The
-fine-tuned 3B model runs at **17.2 tok/s in 2.42 GB** — so it isn't a
+12 GB card at **10.40 GB peak VRAM**, running at **11.5 tok/s**. The
+fine-tuned 3B model runs at **16.0 tok/s in 2.41 GB** — so it isn't a
 quality-for-cost trade either: it beats the 14B model on every content
-metric above while using **~4× less VRAM** and running **~1.4× faster**.
+metric above while using **~4× less VRAM** and running faster. The TF-IDF
+baseline needs no GPU at all and no `tokens_per_second` figure applies to
+it (`14.0 records/sec` — retrieval, not generation).
 
 See `docs/DECISIONS.md` for why arm 2 is served through
 transformers/bitsandbytes rather than the llama.cpp/GGUF path the spec

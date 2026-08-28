@@ -574,3 +574,65 @@ retraining, which is not worth 4+ GPU-hours to recover one number that the
 held-out test evaluation supersedes anyway. `docs/ARCHITECTURE.md` still
 carries pre-pivot CUAD diagrams. No LoRA rank / epoch-count ablations have
 been run.
+
+---
+
+## Final greedy 4-arm results (2026-08-28)
+
+The greedy rerun launched during the rigor pass was interrupted mid-run
+(background process died after arms 1 and 3 completed, before arm 2). Arm 2
+was relaunched standalone and completed; `compare.py` was then re-run over
+all four fresh, mutually-comparable, greedy-decoded arms. These are the
+numbers now in `README.md`, superseding every prior entry in this log that
+cited sampled-decoding figures.
+
+**Per-arm** (full table: `README.md` Results, raw: `artifacts/eval/*/results.json`):
+
+| Arm | ROUGE-1 | BERTScore-F1 | Numeric grounding recall | Fabricated numbers |
+|---|---|---|---|---|
+| Zero-shot 3B | 0.289 | 0.853 | 0.069 | 0.026 |
+| Zero-shot 14B | 0.442 | 0.866 | 0.058 | 0.020 |
+| Fine-tuned 3B | 0.635 | 0.910 | **0.478** | 0.007 |
+| TF-IDF retrieval | 0.461 | 0.863 | 0.145 | **0.699** |
+
+**Confirms every conclusion drawn from the sampled/smoke-test numbers,
+with one addition the smoke test couldn't show:**
+
+1. Fine-tuned 3B beats zero-shot 14B on every reference-similarity metric,
+   all CIs excluding zero (ROUGE-1 Δ +0.193 [+0.181, +0.206]) — matches the
+   sampled run's +0.186 almost exactly, confirming decoding variance was
+   never the source of this effect.
+2. TF-IDF retrieval (200 records, not the earlier 5-record smoke test)
+   significantly outscores zero-shot 14B on ROUGE-1: Δ +0.020
+   [+0.010, +0.029] — small but the CI is entirely positive, so "matched" in
+   the earlier write-up undersold it. Now stated as "outscored" in
+   `README.md` and `CV.tex`. Fabrication rate on the full 200: **69.9%**
+   [65.5%, 74.1%], not the smoke test's rough 59% — the real number is
+   worse than the estimate that shipped in the CV first, corrected there
+   too.
+3. **New finding the smoke test was too small to surface:** fine-tuning's
+   numeric-grounding-recall gain over zero-shot 14B is +0.420
+   [+0.382, +0.459] — a ~7x relative increase (7%→48%), the single largest
+   effect size in the whole comparison table. This is a genuine content-level
+   improvement, not style-matching, since faking it would require actually
+   using the query note's specifics. Correcting an earlier overcaution in
+   this log: the Phase 6 arm 2 entry above said the fine-tuning win
+   "substantially reflects learned house style... not a claim about general
+   capability." That's still the right read for the ROUGE/BERTScore gains,
+   but it doesn't apply to the grounding-recall result, which is a
+   capability claim the data actually supports.
+4. **What did not move:** fabrication rate itself, fine-tuned vs. zero-shot
+   14B, Δ −0.013 [−0.035, +0.005] — CI includes zero. Both arms fabricate a
+   small, statistically indistinguishable share of the numbers they choose
+   to state. Fine-tuning made the model state far more of the note's real
+   numbers; it did not measurably reduce its rate of inventing wrong ones
+   among what it does state. Reported as two separate, differently-evidenced
+   claims in `README.md` rather than collapsed into one "faithfulness
+   improved" headline.
+
+**Process note:** the interrupted background run is why arm ordering in
+`artifacts/eval/` timestamps looks discontinuous (arms 1, 3, 4 dated
+2026-08-27; arm 2 and the final `comparison.json`/`comparison.md` dated
+2026-08-28). No consequence for validity — `compare.py`'s `assert_comparable`
+check passed on all four, confirming identical held-out records regardless
+of when each arm was produced.
