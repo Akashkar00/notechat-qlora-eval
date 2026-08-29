@@ -6,8 +6,11 @@ external drive could be disconnected; no adapter was produced yet.
 
 ## Where the project lives now
 
-`C:\Users\bmsip\company-finetune-eval` — moved off the external T7 SSD (`E:`) on
+`C:\Users\bmsip\notechat-qlora-eval` — moved off the external T7 SSD (`E:`) on
 2026-08-24. The `E:` copy is stale from this point on; treat `C:` as authoritative.
+Renamed from `company-finetune-eval` on 2026-08-28 to match the GitHub repo
+(`Akashkar00/notechat-qlora-eval`); the `.venv` was rebuilt and the kernelspec
+re-registered under the new name, for the same reason as the `E:` move below.
 
 The `.venv` was **not** copied — it was rebuilt at the new location with
 `uv sync --extra gpu` from uv's local cache. Copying a venv between paths leaves the
@@ -16,15 +19,15 @@ from cache is faster than copying 5.5GB over USB anyway.
 
 ## Kernel to select
 
-VS Code → Select Kernel → **`Python 3.11 (company-finetune-eval GPU)`**, i.e.
-`C:\Users\bmsip\company-finetune-eval\.venv\Scripts\python.exe` (Python 3.11.9, matching
+VS Code → Select Kernel → **`Python 3.11 (notechat-qlora-eval GPU)`**, i.e.
+`C:\Users\bmsip\notechat-qlora-eval\.venv\Scripts\python.exe` (Python 3.11.9, matching
 `pyproject.toml`'s `requires-python = ">=3.11,<3.12"`).
 
 Registered as a named kernelspec so it survives VS Code's environment-discovery quirks:
 
 ```
 .venv\Scripts\python.exe -m ipykernel install --user \
-  --name company-finetune-eval --display-name "Python 3.11 (company-finetune-eval GPU)"
+  --name notechat-qlora-eval --display-name "Python 3.11 (notechat-qlora-eval GPU)"
 ```
 
 Re-run that if the project ever moves again. `.vscode/settings.json` also pins

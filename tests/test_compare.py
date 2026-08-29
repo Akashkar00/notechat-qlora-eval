@@ -18,7 +18,7 @@ def _arm(name: str, note_ids: list[str], rouge1_values: list[float], do_sample: 
         "decoding": {"do_sample": do_sample},
         "records": [
             {"note_id": nid, "rouge1": v, "rouge2": v, "rougeL": v, "bertscore_f1": v}
-            for nid, v in zip(note_ids, rouge1_values)
+            for nid, v in zip(note_ids, rouge1_values, strict=True)
         ],
     }
 

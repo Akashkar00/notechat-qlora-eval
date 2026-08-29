@@ -54,8 +54,16 @@ def generate(
     max_new_tokens: int = 512,
     temperature: float = 0.7,
     do_sample: bool = False,
-) -> str:
+    return_n_tokens: bool = False,
+) -> str | tuple[str, int]:
     """Generate one dialogue from one clinical note.
+
+    `return_n_tokens=True` also returns how many tokens the model actually
+    emitted, counted from the generated ids. Re-tokenizing the decoded string
+    instead would be a different number — decoding drops special tokens and
+    the re-encode is not guaranteed to round-trip to the same segmentation —
+    and that number feeds the `tokens_per_second` throughput figure, so the
+    count has to come from the ids the model really produced.
 
     `do_sample` defaults to **False** (greedy decoding) for evaluation.
     Sampling makes every score a single draw from a distribution rather than
@@ -75,9 +83,9 @@ def generate(
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": build_user_prompt(note_row)},
     ]
-    inputs = tokenizer.apply_chat_template(
-        messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
-    ).to(model.device)
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt").to(
+        model.device
+    )
 
     # Only pass sampling knobs when actually sampling — transformers warns
     # (and in some versions errors) if temperature is set with do_sample=False.
@@ -92,4 +100,6 @@ def generate(
             pad_token_id=tokenizer.eos_token_id,
             **gen_kwargs,
         )
-    return tokenizer.decode(output[0][inputs.shape[1] :], skip_special_tokens=True)
+    generated_ids = output[0][inputs.shape[1] :]
+    text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+    return (text, len(generated_ids)) if return_n_tokens else text

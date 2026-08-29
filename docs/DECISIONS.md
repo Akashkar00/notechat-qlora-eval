@@ -636,3 +636,193 @@ with one addition the smoke test couldn't show:**
 2026-08-28). No consequence for validity — `compare.py`'s `assert_comparable`
 check passed on all four, confirming identical held-out records regardless
 of when each arm was produced.
+
+---
+
+## 2026-08-28 — Review pass: correctness fixes, tooling, doc drift
+
+An external review of the finished repo. Findings acted on, in order of how
+much they mattered.
+
+### 1. The contamination control was not a derangement (real bug)
+
+**Decision:** replaced `rng.shuffle` with `derange()`, implemented as
+Sattolo's algorithm, in `src/eval/contamination.py`.
+
+**Why:** the control scores each generated continuation against *another*
+dialogue's second half, establishing the "generic NoteChat style" floor. A
+plain shuffle permits fixed points, so at n=100 there was a ~63% chance
+(1 − 1/e) that at least one record was scored against its **own** true
+continuation while being labelled the control. That inflates the control
+floor and biases the measured delta toward "no contamination" — i.e. the bug
+pushed the probe toward the reassuring answer, which is the worst direction
+for it to be wrong in.
+
+**Alternatives considered:** shuffle-then-rotate-by-one. Tried first and
+**rejected because it is wrong**: rotation removes fixed points with respect
+to the *shuffled* order, not with respect to the original index, which is the
+one that matters. The unit test caught it immediately, which is the argument
+for having written the test before trusting the reasoning. Sattolo's
+algorithm draws uniformly from the cyclic permutations, every one of which is
+a derangement, so the guarantee is structural rather than rejection-sampled.
+
+### 2. The pre-commit hook blocked `src/data/` (real bug, never noticed)
+
+**Decision:** anchored `check_data_leak.py`'s path rules to the repo root
+(`BLOCKED_TOP_LEVEL_DIRS`) instead of testing `part in path.parts`.
+
+**Why:** this is the **identical bug `.gitignore` already carried and had
+fixed** — an unanchored `data` matches a directory at any depth, so the hook
+flagged `src/data/build_dataset.py`, the entire Phase 1 pipeline. It went
+unnoticed only because `pre-commit install` was evidently never run; the hook
+would have rejected those commits the moment it was. Same root cause, two
+files, found by running the hook against every tracked file rather than by
+reading it.
+
+### 3. `SUSPICIOUS_PATTERNS` was still an empty template placeholder
+
+**Decision:** populated it with the raw NoteChat CSV header and PHI-shaped
+identifiers (SSN, MRN, NHS number, labelled DOB, email). Added
+`ALLOWLISTED_PATHS` for `artifacts/eval/`, and 10 tests.
+
+**Why:** an empty pattern list in a security-flavoured hook is worse than no
+hook — it reads as a control that exists. The patterns screen for what would
+matter if this harness were pointed at a real clinical corpus, which is the
+stated design constraint (§1.1), rather than at NoteChat specifically.
+
+**Deliberately not matched:** `Doctor:`/`Patient:` turn markers. They appear
+legitimately 25 times in `tests/test_data.py` alone; a hook that fires on
+ordinary commits gets bypassed, at which point it protects nothing. Verified
+by running the hook over every tracked file (clean) and over synthetic leak
+cases (all blocked), including benign clinical numbers like "64 years old,
+BP 135/85, seen on 2015-03-12" which must *not* trip it.
+
+### 4. Ruff's import sorter would have broken training (caught in review)
+
+**Decision:** adopted ruff (config in `pyproject.toml`, hooks in
+`.pre-commit-config.yaml`) — but pinned the unsloth import order in
+`src/train/train.py` behind `# noqa: I001`.
+
+**Why:** `ruff --fix` alphabetised that block, putting `trl` above `unsloth`
+and **silently disabling unsloth's patching** — the exact failure the comment
+directly above those imports warns about. Worth recording as the general
+lesson: an autofixer optimises for the rule it knows, not for the invariant
+the comment states, and a lint tool introduced late will happily "fix" load-
+bearing code. Every other ruff finding was accepted; the `zip(..., strict=)`
+ones are genuine, since silent length-truncation is precisely the
+index-alignment failure `compare.py` exists to prevent.
+
+### 5. `tokens_per_second` was measured from re-tokenized text
+
+**Decision:** `local_hf.generate(..., return_n_tokens=True)` now returns the
+length of the generated ids; `run_eval.py` uses it instead of re-tokenizing
+the decoded string.
+
+**Why:** decoding drops special tokens and the re-encode is not guaranteed to
+round-trip to the same segmentation, so the old count measured something
+adjacent to, but not equal to, what the model emitted.
+
+**Consequence, stated plainly:** the committed `tokens_per_second` figures
+(16.0 and 11.5 tok/s in `README.md`) were produced by the old method and were
+**not** regenerated — that would cost ~3.5 GPU-hours to move a throughput
+figure slightly. They are flagged in `STATUS_AND_ROADMAP.md` as predating the
+fix. No quality metric, delta, or CI is affected: the change touches only the
+token count, and every conclusion in this repo rests on the others.
+
+### 6. Doc drift — the README contradicted itself
+
+**Decision:** rewrote the README status table and `STATUS_AND_ROADMAP.md`;
+added `LICENSE`; corrected the claim that `docs/ARCHITECTURE.md` is
+pre-pivot.
+
+**Why:** the status table said arm 4 and the contamination probe were "not
+built" while the Results section below it reported arm 4's numbers in full
+and linked `docs/contamination_report.md`. A reader hits that contradiction
+in the first thirty seconds and reasonably starts discounting everything
+after it — the cheapest possible fix for the most expensive kind of doubt.
+`ARCHITECTURE.md` had in fact been rewritten for NoteChat on 2026-08-27; the
+README and roadmap were both still describing it as CUAD-era, so the
+correction went the other way for once.
+
+**Also:** Phase 3 had been *written but never run*, leaving a documented file
+path that did not exist. Running it is what closed the phase.
+
+### 7. Phase 3 result — contamination is detectable but small
+
+**Finding:** on 100 held-out dialogues, the base model's continuations land
++0.0206 ROUGE-L closer to the true second half than to a deranged control,
+95% CI [+0.0140, +0.0267]. The interval excludes zero.
+
+**Decision:** report this as **"detectable but small"**, not as either
+"evidence of memorization" or "no contamination", and rewrite
+`write_report`'s verdict logic to be magnitude-aware rather than binary.
+
+**Why:** the original verdict was `excludes_zero and delta > 0` → "Evidence
+of memorization." That is technically true and practically misleading. With
+n=100 the probe has the power to resolve an effect far smaller than one that
+could undermine any conclusion here, so "the CI excludes zero" and "this
+changes the result" are different claims and a report that merges them is
+reporting statistical significance as if it were importance. The effect is
++0.021 ROUGE-L against a fine-tuning effect of +0.215 (arm 3 over arm 2) and
++0.266 over the very base model probed — an order of magnitude larger.
+
+`MATERIAL_DELTA = 0.05` is now a named module constant, ~a quarter of the
+fine-tuning effect, published as a number precisely because it is a judgement
+call: a reader who disagrees can recompute from the table in the report
+rather than having to reverse-engineer a threshold buried in prose.
+
+**What this costs the project, honestly:** it can no longer say the corpus is
+clean. The defensible sentence is "a small, real contamination signal exists
+and is far too small to account for the result." That is weaker than the
+result the probe was hoped to produce, and it is what the data supports.
+
+**Worth noting the derangement fix pushed the result this way, not away from
+it.** A shuffle with fixed points inflates the control floor, which shrinks
+the measured delta. Had the original `rng.shuffle` been left in place, this
+signal would have been biased toward disappearing — the bug's failure mode
+was to hand back the reassuring answer.
+
+---
+
+## Voice input added — `scripts/voice_to_note.py` (2026-08-29)
+
+**Decision:** added a voice-to-text front end for the existing
+note-to-dialogue pipeline. `scripts/voice_to_note.py` transcribes an audio
+file (`--file`) or a live microphone recording (`--mic`, stopped by pressing
+Enter) with **faster-whisper**, running entirely on-device, then hands the
+transcript to the same `load_model`/`generate` call `try_model.py` already
+uses and prints through the same `report()` function — so a voice note is
+scored by the identical numeric-grounding/turn-format checks as a typed one,
+not a parallel, potentially-drifting code path. `pyproject.toml` gained a
+`voice` extra (`faster-whisper`, `sounddevice`), isolated from the base
+group the same way `gpu` is — the text-only pipeline
+(`build_dataset`/`run_eval`/`try_model`) never needs an audio stack, and
+`faster-whisper` alone pulls in `ctranslate2`, `onnxruntime`, and `av`.
+
+**Why this doesn't touch `PROJECT_SPEC.md` §8's non-goals:** those bar a web
+UI, a FastAPI service, Docker orchestration, and agent frameworks — none of
+which this is. It's a third local CLI entrypoint alongside `try_model.py`
+and `run_eval.py`, reusing their model-loading and scoring code rather than
+adding a new surface to maintain.
+
+**Local-only, deliberately:** transcription runs on-device via
+`faster-whisper`; no audio or transcript is ever sent to an external API,
+matching `PROJECT_SPEC.md` §1.1's data-locality rule. `--whisper-device
+cuda` is supported for speed but is not required — CPU + `int8` is the
+default so the script works without a GPU.
+
+**Alternatives considered:** the original `openai-whisper` package —
+rejected in favor of faster-whisper's CTranslate2 backend, which is faster
+and lighter on this same 12GB-VRAM machine already carrying the QLoRA
+stack; a hosted transcription API — rejected outright, since it would send
+audio (potentially real patient speech, in a non-demo deployment) to a third
+party, the exact thing §1.1 exists to prevent.
+
+**Not yet done:** no unit tests were added — `record_from_mic`/`transcribe`
+depend on a physical microphone/audio backend and aren't meaningfully
+testable without one (unlike the deterministic model/metric code the test
+suite covers); `uv.lock` was regenerated via `uv sync --extra gpu --extra
+voice` and both the `gpu` and `voice` extras' packages were confirmed to
+coexist correctly. No hyperparameter or size claim for the STT model itself
+has been measured — `--whisper-model small` is Whisper's own recommended
+default for the accuracy/speed tradeoff, not a value this repo benchmarked.

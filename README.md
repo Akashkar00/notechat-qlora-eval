@@ -1,4 +1,4 @@
-# company-finetune-eval
+# notechat-qlora-eval
 
 [![tests](https://github.com/Akashkar00/notechat-qlora-eval/actions/workflows/tests.yml/badge.svg)](https://github.com/Akashkar00/notechat-qlora-eval/actions/workflows/tests.yml)
 
@@ -21,21 +21,25 @@ spec: [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md). Decisions log:
 
 ## Status
 
-**Phases 1 (data), 5 (QLoRA fine-tune) and 2 (eval harness) are done, with a
-full 200-record result set for three of the four baseline arms.** Arm 4
-(classic/non-LLM baseline) and the contamination probe are not built. See
-[`docs/STATUS_AND_ROADMAP.md`](docs/STATUS_AND_ROADMAP.md) for the ranked
-list of what's left.
+**All seven phases are complete.** Every arm below was scored on the same 200
+held-out records under greedy decoding, and every number in this README is
+regenerated from `artifacts/eval/` rather than typed by hand. See
+[`docs/STATUS_AND_ROADMAP.md`](docs/STATUS_AND_ROADMAP.md) for what a next
+iteration would tackle.
 
 | Phase | Status |
 |---|---|
 | 1 — Data pipeline | Done — 10,000 NoteChat notes → 8,000/1,000/1,000 split by `note_id`, 0 duplicates (`docs/data_report.md`) |
-| 2 — Eval harness | Done — `pytest tests/test_eval.py` 12/12; full 200-record run for arms 1, 2, and 3, with bootstrap CIs and paired deltas |
-| 3 — Contamination probe | Not started |
-| 4 — Gold annotation | Skipped, documented (`PROJECT_SPEC.md` §7a item 6) |
+| 2 — Eval harness | Done — bootstrap CIs, paired deltas, faithfulness proxy, format check; full 200-record run for all four arms |
+| 3 — Contamination probe | Done — `src/eval/contamination.py`, prefix-continuation probe with a deranged control (`docs/contamination_report.md`) |
+| 4 — Gold annotation | Skipped, documented (`PROJECT_SPEC.md` §7a item 6) — a reasoned skip, not an oversight |
 | 5 — QLoRA fine-tune | Done — `notebooks/finetune.ipynb`, Qwen2.5-3B-Instruct, LoRA r=16, 2 epochs / 250 steps |
-| 6 — Baselines (4 arms) | 3 of 4 complete (arms 1, 2, 3). Arm 4 (classic/non-LLM) not built |
-| 7 — Write-up | In progress |
+| 6 — Baselines (4 arms) | Done — zero-shot 3B, zero-shot 14B, QLoRA 3B, and a no-model TF-IDF retrieval baseline |
+| 7 — Write-up | Done — this README, `docs/MODEL_CARD.md`, `docs/DECISIONS.md` |
+
+`src/train/train.py` is the CLI equivalent of the notebook that produced the
+committed adapter; the adapter itself came from `notebooks/finetune.ipynb`
+(`docs/DECISIONS.md`).
 
 ## Architecture
 
@@ -66,33 +70,42 @@ otherwise (`docs/PROJECT_SPEC.md` §1.1).
 Repo layout as it exists today:
 
 ```
-company-finetune-eval/
+notechat-qlora-eval/
 ├── configs/                  # data.yaml, train.yaml, eval.yaml
 ├── data/                     # gitignored — raw CSV + processed parquet
 ├── src/
 │   ├── data/build_dataset.py    # Phase 1 — pipeline
-│   ├── inference/local_hf.py    # shared prompt/gen logic
+│   ├── inference/local_hf.py    # shared prompt/gen logic (imported by train + eval)
 │   ├── eval/
 │   │   ├── metrics.py             # rouge / bertscore / bootstrap CIs
-│   │   └── run_eval.py            # single entrypoint, one arm per run
-│   ├── train/train.py           # STALE — not yet rewritten to match the notebook
-│   └── baselines/                # EMPTY — arm 4 baseline not built yet
-├── notebooks/finetune.ipynb  # the actual Phase 5 training driver
+│   │   ├── faithfulness.py        # numeric grounding, scored against the note
+│   │   ├── run_eval.py            # single entrypoint, one arm per run
+│   │   ├── compare.py             # cross-arm paired deltas -> comparison.{json,md}
+│   │   └── contamination.py       # Phase 3 memorization probe
+│   ├── train/train.py           # Phase 5 CLI trainer
+│   └── baselines/classic_baseline.py  # arm 4 — TF-IDF retrieval, no model
+├── notebooks/finetune.ipynb  # the training driver that produced the committed adapter
 ├── artifacts/
 │   ├── adapters/.../             # LoRA weights, checkpoints (gitignored)
-│   └── eval/{arm}/results.json   # committed
-├── tests/                     # test_data.py, test_eval.py
+│   └── eval/{arm}/results.json   # committed — the evidence
+├── scripts/run_all_arms.sh   # reproduces every number in this README
+├── scripts/try_model.py      # manual probe: one note in, one dialogue out, scored by hand
+├── scripts/voice_to_note.py  # voice input for the same pipeline (local STT, no web UI/API)
+├── tests/                     # 64 tests — data, metrics, faithfulness, baselines, compare, leak hook
 └── docs/
     ├── PROJECT_SPEC.md         # full spec
     ├── DECISIONS.md              # running log of every design choice + rationale
+    ├── MODEL_CARD.md              # what the adapter is, and what it must not be used for
     ├── STATUS_AND_ROADMAP.md      # what's done, what's left
     ├── data_report.md
+    ├── contamination_report.md
     └── finetune_kernel_setup_status.md
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the original
-phase-by-phase design (written before the NoteChat pivot — treat this
-README's diagram above as the current one).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the phase-by-phase
+design: how the metric modules fit together, why `faithfulness.py` scores
+against the clinical note rather than the reference, and the contamination
+probe's data flow.
 
 ## Results
 
@@ -170,6 +183,35 @@ it is the strongest justification in this repo for building
 `faithfulness.py` in the first place. See `docs/contamination_report.md`
 and `docs/MODEL_CARD.md` for how this should and shouldn't be read.
 
+### Contamination — did the base model already know this corpus?
+
+NoteChat's notes are public PMC-Patients case reports, so "fine-tuning
+improved the scores" could partly mean "fine-tuning surfaced text the model
+already had." `src/eval/contamination.py` feeds the **base** model the first
+half of 100 held-out dialogues as raw text and measures how close its
+continuation lands to the true second half — against a control continuation
+from a *different* dialogue, assigned by a derangement so no record is ever
+its own control.
+
+| Comparison | ROUGE-L | 95% CI |
+|---|---|---|
+| Generated vs. **true** continuation | 0.1683 | [0.1627, 0.1736] |
+| Generated vs. **random** continuation (control) | 0.1477 | [0.1434, 0.1523] |
+| **Δ (true − control)** | **+0.0206** | **[+0.0140, +0.0267]** — excludes zero |
+
+**Detectable but small, and the distinction matters.** The CI excludes zero,
+so the memorization signal is real and not sampling noise — this repo does
+*not* get to claim the corpus is clean. But it is +0.021 ROUGE-L, a 14% lift
+over the generic-style floor, against a fine-tuning effect of +0.215 (arm 3
+over arm 2) and +0.266 over the very base model probed here. The
+contamination is an order of magnitude too small to account for the result.
+
+Stated precisely: **a small, real contamination signal exists, and it does
+not explain the fine-tuning gains.** Full method, threshold, and limitations
+in [`docs/contamination_report.md`](docs/contamination_report.md) — including
+that prefix continuation only catches *verbatim* recall, so this is a floor
+on memorization, not a proof of its absence.
+
 ### What these numbers do *not* say
 
 1. **The reference is synthetic.** The `conversation` target is itself
@@ -187,6 +229,14 @@ and `docs/MODEL_CARD.md` for how this should and shouldn't be read.
    fabricated diagnosis or finding stated without a number is invisible to
    `faithfulness.py`. Treat "0.7% fabrication rate" as a floor, not a
    certificate — see `docs/MODEL_CARD.md`'s limitations section.
+4. **BERTScore here is raw, not baseline-rescaled.** Raw BERTScore has a
+   high floor — two unrelated English texts still score ~0.80 — so the
+   absolute values above compress into a narrow band and the 0.853→0.910
+   gap reads as smaller than it is. Rescaling is a fixed affine shift per
+   (model, language), so it cannot change any ranking, sign, or CI
+   conclusion here; it is left off deliberately (`src/eval/metrics.py`).
+   Read every BERTScore in this README comparatively — "arm 3 above arm 2",
+   never "0.910 is 91% correct".
 
 ### Cost, not just quality
 
@@ -203,6 +253,15 @@ transformers/bitsandbytes rather than the llama.cpp/GGUF path the spec
 originally called for (a network/build-toolchain constraint on this
 machine, not a design preference).
 
+> **One caveat on the throughput figures specifically.** The committed
+> `tokens_per_second` values were produced before a fix that counts
+> generated token ids directly instead of re-tokenizing the decoded string
+> (`docs/DECISIONS.md`, 2026-08-28). A full rerun would shift them slightly.
+> They were not regenerated because doing so costs ~3.5 GPU-hours to move a
+> throughput number; **no quality metric, delta, or CI is affected** — the
+> change touches only the token count. Every other number below reproduces
+> exactly.
+
 ## Repro
 
 **Every number in this README is reproduced by one command:**
@@ -216,9 +275,12 @@ than approximately — see "Reproducibility" below. The individual steps:
 
 ```bash
 uv sync                      # core + dev deps
-uv sync --extra gpu           # + CUDA stack for training / 4-bit inference
+uv sync --extra gpu --extra voice   # + CUDA stack and/or voice input, as needed
+                                      # (pass every extra you want together — `uv sync
+                                      # --extra X` alone uninstalls any other extra's packages)
 
-pytest tests/                 # 51 tests: data, metrics, faithfulness, baselines, compare
+pytest tests/                 # 64 tests: data, metrics, faithfulness, baselines, compare, leak hook
+pre-commit install            # data-leak hook + ruff lint/format on every commit
 
 python -m src.data.build_dataset               # Phase 1 — see docs/data_report.md
 
@@ -265,10 +327,38 @@ python -m src.eval.contamination
 > run it under WSL2 or on a Linux/NVIDIA machine. 4-bit *inference* for the
 > eval arms does run natively.
 
+## Manual inspection and voice input
+
+`scripts/try_model.py` hands one clinical note to a trained arm and prints
+the generated dialogue next to the same numeric-grounding/format checks
+`run_eval.py` scores in aggregate — for looking at a single generation by
+eye, not for producing a number that belongs in this README (`docs/DECISIONS.md`'s
+Phase 5 fabrication finding came from exactly this kind of manual read).
+
+`scripts/voice_to_note.py` adds a voice front end to that same script: it
+transcribes an audio file (`--file path.wav`) or a live microphone recording
+(`--mic`, stopped by pressing Enter) locally with `faster-whisper`, then
+feeds the transcript through the identical `load_model`/`generate`/`report`
+path. Requires `uv sync --extra gpu --extra voice` (both extras together —
+see the note in Repro above).
+
+```bash
+python scripts/try_model.py --from-test random          # a held-out test note
+python scripts/voice_to_note.py --mic                    # speak a note instead of typing one
+```
+
+No audio or transcript is sent anywhere — transcription runs on-device, same
+as everything else in this repo (`docs/PROJECT_SPEC.md` §1.1).
+
 ## Data governance
 
-Nothing under `data/` is ever committed. See `docs/PROJECT_SPEC.md` §1.1 and
-`.pre-commit-config.yaml`. No company data is ever sent to an external API
+Nothing under `data/` is ever committed. A pre-commit hook
+(`scripts/check_data_leak.py`, 10 tests) blocks the top-level data
+directories, data-file extensions, the raw NoteChat CSV schema pasted into
+any file, and PHI-shaped identifiers (SSN/MRN/NHS/DOB/email) — the shapes
+that would matter if this harness were pointed at a real clinical corpus,
+which is the constraint it is designed against. See
+`docs/PROJECT_SPEC.md` §1.1 and `.pre-commit-config.yaml`. No company data is ever sent to an external API
 unless `OPEN_DECISIONS` explicitly says otherwise. NoteChat's clinical notes
 (PMC-Patients case reports) and dialogues are both public research data, not
 real confidential company or patient data — see `docs/PROJECT_SPEC.md` §7a

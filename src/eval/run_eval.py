@@ -106,7 +106,13 @@ def run(
         raise FileNotFoundError(f"{TEST_PARQUET} not found — run `python -m src.data.build_dataset` first.")
     df = sample_records(pl.read_parquet(TEST_PARQUET), n_records, seed)
 
-    torch.cuda.reset_peak_memory_stats()
+    # Arm 4 is advertised as needing no GPU, so the CUDA bookkeeping has to be
+    # optional rather than unconditional — torch.cuda.reset_peak_memory_stats()
+    # raises on a CPU-only machine, which would make the "no model, no GPU"
+    # baseline the one arm that still demands CUDA to run.
+    cuda_available = torch.cuda.is_available()
+    if cuda_available:
+        torch.cuda.reset_peak_memory_stats()
     records = []
     total_gen_tokens = 0
 
@@ -154,21 +160,24 @@ def run(
         t0 = time.perf_counter()
         for row in df.iter_rows(named=True):
             row_t0 = time.perf_counter()
-            gen = generate(model, tokenizer, row, do_sample=do_sample)
+            gen, n_tokens = generate(model, tokenizer, row, do_sample=do_sample, return_n_tokens=True)
             row_elapsed = time.perf_counter() - row_t0
 
-            n_tokens = len(tokenizer(gen, add_special_tokens=False)["input_ids"])
             total_gen_tokens += n_tokens
             records.append(_score_record(row, gen, {"latency_s": row_elapsed, "gen_tokens": n_tokens}))
         total_elapsed = time.perf_counter() - t0
 
-    generation_vram_gb = torch.cuda.max_memory_allocated() / 1e9
+    generation_vram_gb = torch.cuda.max_memory_allocated() / 1e9 if cuda_available else None
 
     # BERTScore loads its own roberta-large scorer onto the GPU, so measure
     # generation VRAM before this point — otherwise every arm's "peak VRAM"
     # would be contaminated by the scorer and stop reflecting serving cost.
     bert = bertscore([r["generated"] for r in records], [r["reference"] for r in records])
-    for rec, f1 in zip(records, bert["f1"]):
+    # strict=True: one BERTScore per record, by construction. A length
+    # mismatch would silently drop records from the aggregate rather than
+    # fail, which is exactly the index-alignment bug compare.py exists to
+    # prevent downstream.
+    for rec, f1 in zip(records, bert["f1"], strict=True):
         rec["bertscore_f1"] = f1
 
     bs_cfg = eval_cfg["bootstrap"]

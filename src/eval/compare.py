@@ -121,7 +121,9 @@ def render_markdown(arms: dict[str, dict], comparisons: dict) -> str:
     for name, result in sorted(arms.items()):
         agg = result["aggregate"]
 
-        def ci(metric: str) -> str:
+        def ci(metric: str, agg: dict = agg) -> str:
+            # `agg` bound as a default rather than captured: the closure would
+            # otherwise read whichever arm the loop had reached by call time.
             if metric not in agg:
                 return "—"
             m = agg[metric]
@@ -161,9 +163,7 @@ def main() -> None:
     note_ids = assert_comparable(arms)
     print(f"Comparing {len(arms)} arms on {len(note_ids)} shared records: {', '.join(sorted(arms))}")
 
-    comparisons = {
-        f"{a} vs {b}": compare_pair(arms, a, b, bs_cfg) for a, b in itertools.combinations(sorted(arms), 2)
-    }
+    comparisons = {f"{a} vs {b}": compare_pair(arms, a, b, bs_cfg) for a, b in itertools.combinations(sorted(arms), 2)}
 
     payload = {
         "n_records": len(note_ids),

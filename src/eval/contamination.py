@@ -17,8 +17,9 @@ half.
 restating a note's facts as questions — so *any* competent model scores well
 above zero on this by writing generic plausible dialogue, with no
 memorization at all. Scoring the same generated continuation against a
-*different, randomly chosen* dialogue's second half gives the "generic
-style" floor. The comparison that matters is:
+*different* dialogue's second half — assigned by a derangement, so no record
+is ever silently handed its own continuation as the control — gives the
+"generic style" floor. The comparison that matters is:
 
     overlap(generated, true continuation)  vs  overlap(generated, random continuation)
 
@@ -50,6 +51,10 @@ TRAIN_CONFIG_PATH = Path("configs/train.yaml")
 EVAL_CONFIG_PATH = Path("configs/eval.yaml")
 PROCESSED_DIR = Path("data/processed")
 REPORT_PATH = Path("docs/contamination_report.md")
+# The line between "statistically detectable" and "large enough to change a
+# conclusion" — see write_report(). Stated as a constant rather than buried in
+# prose so it is arguable rather than implicit.
+MATERIAL_DELTA = 0.05
 RESULTS_PATH = Path("artifacts/eval/contamination.json")
 
 
@@ -65,6 +70,33 @@ def split_dialogue_halves(conversation: str) -> tuple[str, str] | None:
         return None
     midpoint = len(turns) // 2
     return "\n".join(turns[:midpoint]), "\n".join(turns[midpoint:])
+
+
+def derange(items: list[str], rng: random.Random) -> list[str]:
+    """Deterministic permutation in which **no element keeps its original index**.
+
+    The control asks "how well does this generated continuation match some
+    *other* dialogue's second half." A plain `rng.shuffle` permits fixed
+    points, which would score a record against its own true continuation
+    while labelling it the control — at n=100 at least one such collision
+    occurs with probability ~1 - 1/e ≈ 63%, inflating the control floor and
+    biasing the measured delta toward "no contamination."
+
+    Uses Sattolo's algorithm, which draws uniformly from the cyclic
+    permutations of the list. Every cyclic permutation of length >= 2 is a
+    derangement, so the no-fixed-point guarantee is structural rather than
+    rejection-sampled. Note that shuffling and then rotating by one is *not*
+    sufficient: rotation removes fixed points with respect to the shuffled
+    order, not with respect to the original index, which is the one that
+    matters here.
+    """
+    if len(items) < 2:
+        raise ValueError(f"a control derangement needs at least 2 records, got {len(items)}")
+    result = list(items)
+    for i in range(len(result) - 1, 0, -1):
+        j = rng.randrange(i)  # strictly less than i — this is what forbids a fixed point
+        result[i], result[j] = result[j], result[i]
+    return result
 
 
 def probe(model_name: str, n_records: int, split: str, seed: int, max_new_tokens: int = 256) -> dict:
@@ -88,11 +120,8 @@ def probe(model_name: str, n_records: int, split: str, seed: int, max_new_tokens
         if halves is not None:
             pairs.append((row["note_id"], *halves))
 
-    # Deterministic shuffle for the control: each record's generated
-    # continuation is scored against some *other* record's true continuation.
     rng = random.Random(seed)
-    shuffled = [p[2] for p in pairs]
-    rng.shuffle(shuffled)
+    control_continuations = derange([p[2] for p in pairs], rng)
 
     # Base model only. Probing the fine-tuned model would conflate
     # pretraining memorization (the question) with our own fine-tune having
@@ -106,7 +135,8 @@ def probe(model_name: str, n_records: int, split: str, seed: int, max_new_tokens
     )
 
     records = []
-    for (note_id, prefix, true_continuation), control_continuation in zip(pairs, shuffled):
+    # strict=True: derange() returns exactly one control per pair.
+    for (note_id, prefix, true_continuation), control_continuation in zip(pairs, control_continuations, strict=True):
         # Raw continuation, no chat template — this probes the LM's memory of
         # the text itself, not its behaviour as an assistant.
         inputs = tokenizer(prefix, return_tensors="pt").to(model.device)
@@ -152,19 +182,50 @@ def write_report(result: dict) -> None:
     true_ci = result["rougeL_vs_true"]
     ctrl_ci = result["rougeL_vs_control"]
     delta = result["delta_true_minus_control"]
-    contaminated = delta["excludes_zero"] and delta["delta"] > 0
+    detected = delta["excludes_zero"] and delta["delta"] > 0
+    # Relative lift over the "generic NoteChat style" floor the control measures.
+    relative_lift = delta["delta"] / ctrl_ci["point_estimate"] if ctrl_ci["point_estimate"] else float("nan")
 
-    verdict = (
-        "**Evidence of memorization.** The base model continues held-out NoteChat "
-        "dialogues measurably closer to their true continuation than to an unrelated "
-        "one. Fine-tuning gains on this corpus should be read with that in mind."
-        if contaminated
-        else "**No evidence of memorization.** The base model's continuations are no closer "
-        "to the true continuation than to an unrelated dialogue from the same corpus — "
-        "i.e. it produces NoteChat-*style* text without recalling these specific "
-        "dialogues. The fine-tuning gains reported in README.md are therefore not "
-        "explained by pretraining contamination."
-    )
+    # A binary significant/not verdict would be the wrong shape of answer here.
+    # With n=100 this probe has the power to resolve an effect far smaller than
+    # one that would actually undermine a conclusion, so "the CI excludes zero"
+    # and "this matters" are different claims and the report must not merge
+    # them. MATERIAL_DELTA is the stated line between them: 0.05 ROUGE-L, ~a
+    # quarter of the fine-tuning effect this repo reports (+0.215 ROUGE-L for
+    # arm 3 over arm 2). It is a judgement call, published as a number so a
+    # reader can disagree with it and recompute from the table above.
+    if not detected:
+        verdict = (
+            "**No evidence of memorization.** The base model's continuations are no closer "
+            "to the true continuation than to an unrelated dialogue from the same corpus — "
+            "i.e. it produces NoteChat-*style* text without recalling these specific "
+            "dialogues. The fine-tuning gains reported in README.md are therefore not "
+            "explained by pretraining contamination."
+        )
+    elif delta["delta"] < MATERIAL_DELTA:
+        verdict = (
+            f"**Detectable but small.** The base model continues held-out NoteChat dialogues "
+            f"measurably closer to their true continuation than to an unrelated one — the "
+            f"paired CI excludes zero, so the effect is real and not sampling noise. But it is "
+            f"small: {delta['delta']:+.4f} ROUGE-L, a {relative_lift:.0%} lift over the "
+            f"generic-style floor, and below the {MATERIAL_DELTA} threshold this report treats "
+            f"as material.\n\n"
+            f"Read it as: **the base model has some familiarity with this corpus, but nowhere "
+            f"near enough to explain the fine-tuning gains.** Those gains are +0.215 ROUGE-L "
+            f"(arm 3 over arm 2) and +0.266 over the base model this probe tested — an order of "
+            f"magnitude larger than the memorization signal measured here. The honest statement "
+            f"is 'a small, real contamination signal exists and is far too small to account for "
+            f"the result', not 'the corpus is clean'."
+        )
+    else:
+        verdict = (
+            f"**Evidence of substantial memorization.** The base model continues held-out "
+            f"NoteChat dialogues markedly closer to their true continuation than to an unrelated "
+            f"one ({delta['delta']:+.4f} ROUGE-L, a {relative_lift:.0%} lift over the "
+            f"generic-style floor), at or above the {MATERIAL_DELTA} threshold this report "
+            f"treats as material. Fine-tuning gains on this corpus are confounded with recall "
+            f"and should not be reported as learning without further work."
+        )
 
     lines = [
         "# Contamination report (Phase 3)",
@@ -187,7 +248,8 @@ def write_report(result: dict) -> None:
         "- The first half is fed as **raw text** (no chat template) and continued with",
         "  greedy decoding; memorized text is the argmax path.",
         "- **Control:** the same generated continuation is also scored against a",
-        "  *different* dialogue's second half. NoteChat dialogues are formulaic, so a",
+        "  *different* dialogue's second half, assigned by a **derangement** so no",
+        "  record is ever its own control. NoteChat dialogues are formulaic, so a",
         "  non-memorizing model still scores well above zero — the control is what",
         "  separates 'knows the style' from 'knows this text'.",
         "",

@@ -76,10 +76,14 @@ def main() -> None:
     if not TRAIN_PARQUET.exists():
         raise FileNotFoundError(f"{TRAIN_PARQUET} not found — run `python -m src.data.build_dataset` first")
 
-    # unsloth must be imported before trl/transformers/peft to apply its patches.
-    from unsloth import FastLanguageModel
-    from unsloth.chat_templates import get_chat_template
-    from trl import SFTConfig, SFTTrainer
+    # unsloth must be imported before trl/transformers/peft to apply its
+    # patches. `isort: skip_file`-style ordering is enforced by the noqa below:
+    # ruff's import sorter alphabetises these, which puts trl first and
+    # silently disables unsloth's patching — a correctness bug, not a style
+    # preference. Do not "fix" the order.
+    from unsloth import FastLanguageModel  # noqa: I001
+    from unsloth.chat_templates import get_chat_template  # noqa: I001
+    from trl import SFTConfig, SFTTrainer  # noqa: I001
 
     compute_dtype = cfg["quantization"]["bnb_4bit_compute_dtype"]
     model, tokenizer = FastLanguageModel.from_pretrained(

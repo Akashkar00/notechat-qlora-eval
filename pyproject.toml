@@ -1,5 +1,5 @@
 [project]
-name = "company-finetune-eval"
+name = "notechat-qlora-eval"
 version = "0.1.0"
 description = "On-prem QLoRA vs. a larger baseline model, fine-tuned and evaluated on company data"
 requires-python = ">=3.11,<3.12"
@@ -50,12 +50,25 @@ gpu = [
 llm-large = [
     "llama-cpp-python==0.3.4",
 ]
+# Voice input for scripts/voice_to_note.py. Kept out of the base group like
+# `gpu` above: faster-whisper pulls in ctranslate2/onnxruntime/av, and
+# sounddevice needs a PortAudio binding, neither of which the text-only
+# pipeline (build_dataset/run_eval/try_model) needs. Transcription runs
+# entirely on-device (docs/PROJECT_SPEC.md §1.1) — no audio is ever sent to
+# an external API.
+voice = [
+    "faster-whisper>=1.0",
+    "sounddevice>=0.5",
+]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3",
     "pre-commit>=4.0",
     "ipykernel>=6.29",
+    # Pinned to the same version the pre-commit hook uses, so a local
+    # `ruff check` and a hook run can never disagree about what passes.
+    "ruff==0.9.4",
 ]
 
 # PyPI's torch wheels are CPU-only on Windows, which silently yields
@@ -81,6 +94,23 @@ explicit = true
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
 llama-cpp-python = { index = "llama-cpp-python-cu124" }
+
+# Line length 120, not the default 88: this codebase deliberately writes long
+# explanatory error messages and metric expressions on one line rather than
+# wrapping them into something harder to read. Rules are the default set plus
+# import sorting (I), bugbear (B), comprehensions (C4) and pyupgrade (UP).
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+# notebooks/finetune.ipynb is excluded on purpose: it is the *record* of the
+# training run that produced the committed adapter, not source under active
+# development. `ruff --fix` rewrote it (stripped an unused import, inserted
+# nbformat cell ids), which quietly makes the committed file no longer the
+# file that was executed. Evidence does not get reformatted.
+exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "C4", "UP", "W"]
 
 [build-system]
 requires = ["hatchling"]

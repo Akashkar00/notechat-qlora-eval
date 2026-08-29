@@ -146,17 +146,17 @@ def test_numeric_faithfulness_detects_fabricated_values():
 
 
 def test_numeric_faithfulness_hand_computed_partial_overlap():
-    note = "Age 50. Pulse 80. Temp 37."          # {50, 80, 37}
+    note = "Age 50. Pulse 80. Temp 37."  # {50, 80, 37}
     gen = "Doctor: you are 50 and your pulse is 80, weight 99."  # {50, 80, 99}
     result = numeric_faithfulness(gen, note)
-    assert result["numeric_grounding_recall"] == 2 / 3   # 50, 80 carried over; 37 missed
-    assert result["numeric_precision"] == 2 / 3          # 99 fabricated
+    assert result["numeric_grounding_recall"] == 2 / 3  # 50, 80 carried over; 37 missed
+    assert result["numeric_precision"] == 2 / 3  # 99 fabricated
     assert abs(result["fabricated_number_rate"] - 1 / 3) < 1e-9
 
 
 def test_numeric_faithfulness_generation_with_no_numbers_fabricates_nothing():
     result = numeric_faithfulness("Doctor: How are you? Patient: Fine.", "A 64-year-old man.")
-    assert result["numeric_precision"] == 1.0       # stated nothing, so invented nothing
+    assert result["numeric_precision"] == 1.0  # stated nothing, so invented nothing
     assert result["fabricated_number_rate"] == 0.0
     assert result["numeric_grounding_recall"] == 0.0  # but carried none of the note's specifics
 

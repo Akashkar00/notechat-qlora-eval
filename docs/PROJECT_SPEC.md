@@ -104,7 +104,7 @@ constraints + lockfile beat hand-typed `==` pins).
 ## 3. Repo structure
 
 ```
-company-finetune-eval/
+notechat-qlora-eval/
 ├── README.md                  # results table (TBD until produced), repro commands
 ├── pyproject.toml
 ├── .gitignore                 # data/, *.parquet, *.csv, models/, outputs/

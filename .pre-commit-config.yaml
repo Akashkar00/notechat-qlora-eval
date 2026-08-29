@@ -6,3 +6,23 @@ repos:
         entry: python scripts/check_data_leak.py
         language: system
         pass_filenames: true
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
+    hooks:
+      - id: ruff
+        name: Lint with ruff
+        args: [--fix]
+      - id: ruff-format
+        name: Format with ruff
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-added-large-files
+        # Model weights and data are gitignored; this is the backstop for a
+        # checkpoint or parquet that slips past those rules.
+        args: [--maxkb=2048]

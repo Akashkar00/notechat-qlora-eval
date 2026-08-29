@@ -33,6 +33,22 @@ def bertscore(generated: list[str], reference: list[str]) -> dict[str, list[floa
     dependency group: it pulls in torch and downloads a roberta-large
     scorer. Keeping it out of module scope is what lets the metric unit
     tests (and CI) run on a machine with no CUDA stack at all.
+
+    **Raw, not baseline-rescaled** (`rescale_with_baseline=False`, the
+    default). Raw BERTScore has a high, task-dependent floor — two unrelated
+    English texts still score ~0.80 — so absolute values compress into a
+    narrow band near the top of the range and a 0.85-vs-0.91 gap looks far
+    smaller than it is. Rescaling against BERTScore's baseline would spread
+    that band out and make the numbers read more intuitively.
+
+    It is deliberately left off because the rescaling baseline is a fixed
+    constant per (model, language): subtracting it is a monotone affine
+    transform of every score, so it cannot change the sign of any paired
+    delta, which arm is ranked above which, or whether a bootstrap CI
+    excludes zero. It would only rescale figures that are always reported
+    against each other rather than against an external threshold. Every
+    absolute BERTScore in this repo must therefore be read comparatively —
+    "arm 3 above arm 2", never "0.910 is 91% correct".
     """
     try:
         from bert_score import score

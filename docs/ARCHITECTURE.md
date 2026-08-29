@@ -111,7 +111,7 @@ free-form dialogue has no structured schema to validate and no verbatim
 evidence spans to verify (`configs/eval.yaml` records this).
 
 Every metric module is unit-tested against hand-computed examples before it
-scores a real model — 46 tests in `tests/`.
+scores a real model — 64 tests in `tests/`.
 
 ---
 
@@ -179,7 +179,7 @@ between true and random is evidence of having seen the text before.
 ## 6. Repo layout
 
 ```
-company-finetune-eval/
+notechat-qlora-eval/
 ├── configs/              # data.yaml, train.yaml, eval.yaml
 ├── data/                 # gitignored — raw CSV + processed parquet
 ├── src/
@@ -198,7 +198,7 @@ company-finetune-eval/
 ├── artifacts/
 │   ├── adapters/             # LoRA weights (gitignored — large)
 │   └── eval/                 # results.json per arm + comparison (committed)
-├── tests/                    # 46 tests: data, metrics, baselines, compare
+├── tests/                    # 64 tests: data, metrics, faithfulness, baselines, compare, leak hook
 └── docs/
 ```
 

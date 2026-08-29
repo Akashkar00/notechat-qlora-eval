@@ -112,8 +112,15 @@ treats a high ROUGE score as evidence of quality is refuted by that arm.
 NoteChat is public and its notes come from PMC-Patients, so the base model
 may have encountered the corpus in pretraining. Probed in
 `docs/contamination_report.md` (`python -m src.eval.contamination`) via
-prefix-continuation against a random-continuation control. See that report
-for the finding and its limitations.
+prefix-continuation against a control continuation drawn from a different
+dialogue (assigned by a derangement, so no record is ever its own control).
+**Finding: detectable but small.** The base model's continuations land
++0.0206 ROUGE-L closer to the true continuation than to an unrelated one, CI
+[+0.0140, +0.0267] — real, since the interval excludes zero, but roughly an
+order of magnitude below the fine-tuning effect (+0.215 over arm 2). It does
+not explain the gains; it also is not nothing, and this card does not claim
+the corpus is uncontaminated. Prefix continuation catches only verbatim
+recall, so treat it as a floor. See that report for method and limitations.
 
 ## Known limitations
 

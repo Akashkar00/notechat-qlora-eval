@@ -72,7 +72,7 @@ def build_records(raw: pl.DataFrame) -> tuple[list[dict], list[tuple[str, str]],
     dropped_dupes: list[tuple[str, str]] = []
     preamble_stripped_count = 0
 
-    for i, row in enumerate(raw.iter_rows(named=True)):
+    for row in raw.iter_rows(named=True):
         note = row["data"]
         conversation_raw = row["conversation"]
 

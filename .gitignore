@@ -28,6 +28,10 @@ uv.lock.tmp
 .env
 *.env.local
 
+# generated test audio (voice_to_note.py smoke-test fixtures) — same
+# rationale as /data/: bulky generated files, not source
+/test_audio/
+
 # training artifacts — model weights/checkpoints stay local (too large for
 # git, and *.safetensors/*.pt below cover the binary weights specifically);
 # artifacts/eval/*.json results are small and are the actual evidence this
